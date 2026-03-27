@@ -223,7 +223,7 @@ def main() -> None:
 
         time.sleep(5)
         posts = http_get_json(
-            f'/posts.json?before={last_id - 1}')['latest_posts']
+            f'/posts.json?before={last_id}')['latest_posts']
 
         # Discourse implicitly limits the posts query for IDs between `before` and
         # `before - 50`, so if we don't get any results we have to kind of scan.
