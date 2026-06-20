@@ -70,3 +70,64 @@ archive
     └── 2023-09-September
         └── 2023-09-05-public-archive-for-delving-bitcoin-id87.md
 ```
+
+## Rendering an HTML mirror
+
+Once you have an archive, `mirror.py` renders it into a static HTML site you can
+serve anywhere. It reads the per-post JSON under `<target-dir>/posts`, groups the
+posts into topics, and writes one minimal, self-contained HTML page per topic
+(using Discourse's server-rendered `cooked` HTML) plus a flat `index.html`
+listing topics with the most recently active first.
+
+```sh
+% ./mirror.py --help
+usage: discourse-mirror [-h] [-u URL] [--debug] [-t TARGET_DIR] [-o OUTPUT_DIR]
+                        [-s SITE_URL]
+
+Render a static HTML mirror from a Discourse archive
+
+options:
+  -h, --help            show this help message and exit
+  -u URL, --url URL     URL of the source Discourse server (used to make
+                        relative links in the archived HTML absolute)
+  --debug
+  -t TARGET_DIR, --target-dir TARGET_DIR
+                        Directory of the archive to read
+  -o OUTPUT_DIR, --output-dir OUTPUT_DIR
+                        Directory to write the rendered site into
+  -s SITE_URL, --site-url SITE_URL
+                        URL where the mirror itself will be deployed (used for
+                        og:url tags). Optional.
+```
+
+Typical usage, reading the `./archive` produced above and writing the site into
+`./site`:
+
+```sh
+% ./mirror.py -t ./archive -o ./site -u https://delvingbitcoin.org
+```
+
+The `-u`/`--url` value is used to rewrite root-relative links and images in the
+archived HTML (e.g. `/u/alice`, `/uploads/...`) back to absolute URLs on the
+source server, so they resolve from wherever you host the mirror. It defaults to
+the same `DISCOURSE_URL` environment variable / value as `discourse-archive`, so
+make sure it matches the site you archived.
+
+The optional `-s`/`--site-url` (or `SITE_URL` env var) is the public URL where
+the rendered mirror will be hosted, e.g. `https://archive.example.org`. When
+set, it's used for `og:url` meta tags so social previews link back to the
+mirror; if omitted, topic pages fall back to pointing `og:url` at the original
+Discourse thread (matching their `rel=canonical`) and the index omits `og:url`
+entirely.
+
+The generated structure looks like:
+```
+site
+├── index.html
+├── 2025-10-13-about-the-meta-category-id1.html
+├── 2025-10-14-about-the-research-category-id25.html
+└── 2026-06-18-outbound-connection-success-rates-of-a-bitcoin-node-id142.html
+```
+
+Re-running is idempotent - it overwrites the output directory in place, so you
+can regenerate the mirror after each sync.
