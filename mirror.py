@@ -143,6 +143,11 @@ def rewrite_links(cooked: str, base_url: str) -> str:
     return _REL_LINK_RE.sub(rf'\g<attr>="{base}/', cooked)
 
 
+def format_datetime(dt: datetime.datetime) -> str:
+    """Human-friendly rendering of a post timestamp, e.g. "29 Jan 2025, 11:17 UTC"."""
+    return dt.strftime('%d %b %Y, %H:%M UTC')
+
+
 _AVATAR_SIZE = 48
 
 
@@ -202,6 +207,10 @@ class MirrorPost:
 
     def get_created_at(self) -> datetime.datetime:
         return datetime.datetime.fromisoformat(self.raw['created_at'])
+
+    @property
+    def created_at_display(self) -> str:
+        return format_datetime(self.get_created_at())
 
     def get_updated_at(self) -> datetime.datetime:
         return datetime.datetime.fromisoformat(
@@ -303,7 +312,8 @@ def render_topic(topic: MirrorTopic, base_url: str) -> str:
             author,
             f'<a href="{base_url}{html.escape(post.post_url)}">'
             f'#{post.post_number}</a>',
-            f'<time>{html.escape(post.raw["created_at"])}</time>',
+            f'<time datetime="{html.escape(post.raw["created_at"])}">'
+            f'{html.escape(post.created_at_display)}</time>',
         ]
         if post.reply_to_post_number:
             meta.append(
