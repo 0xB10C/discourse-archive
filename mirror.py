@@ -105,6 +105,8 @@ _STYLE = (
     'text-align:right;}'
     'footer.build{margin-top:3rem;padding-top:1rem;border-top:1px solid #eee;'
     'font-size:.85em;color:#888;text-align:center;}'
+    '.missing-posts{border:1px solid #f0c36d;background:#fff8e6;color:#7a5b00;'
+    'border-radius:.25rem;padding:.5rem 1rem;margin:1rem 0;font-size:.9em;}'
     '</style>'
 )
 
@@ -204,6 +206,25 @@ class MirrorTopic:
         return f"{date}-{self.slug}-id{self.id}.html"
 
 
+def render_missing_posts(previous_post_number: int, next_post_number: int) -> str:
+    """Warning box for post numbers missing between two consecutive posts.
+
+    A gap means the post was either never fetched or is gone from the source
+    (deleted/moderated) -- we can't tell which from the archive alone.
+    """
+    missing = next_post_number - previous_post_number - 1
+    if missing <= 0:
+        return ''
+    if missing == 1:
+        label = f'post #{previous_post_number + 1}'
+    else:
+        label = f'posts #{previous_post_number + 1}&ndash;#{next_post_number - 1}'
+    return (
+        '<!-- MIRROR-MISSING-POST -->\n'
+        f'<p class="missing-posts">&#9888; {label} missing '
+        '(not fetched, or removed/moderated on the source site)</p>')
+
+
 def render_topic(topic: MirrorTopic, base_url: str) -> str:
     """Render a single topic (with all its posts) to an HTML document."""
     title = html.escape(topic.title)
@@ -234,7 +255,12 @@ def render_topic(topic: MirrorTopic, base_url: str) -> str:
         f'&middot; <a href="{canonical}">view original topic &rarr;</a></p>',
     ]
 
+    previous_post_number = None
     for post in topic.posts:
+        if previous_post_number is not None:
+            parts.append(render_missing_posts(previous_post_number, post.post_number))
+        previous_post_number = post.post_number
+
         meta = [
             f'<strong>{html.escape(post.author)}</strong>',
             f'<a href="{base_url}{html.escape(post.post_url)}">'
