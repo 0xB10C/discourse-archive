@@ -131,3 +131,34 @@ site
 
 Re-running is idempotent - it overwrites the output directory in place, so you
 can regenerate the mirror after each sync.
+
+### Missing posts
+
+If a topic has a gap in its post numbers (e.g. posts #14 and #16 are archived
+but #15 isn't), the mirror renders an inline warning box between the
+surrounding posts calling out the gap, rather than silently skipping it.
+
+A gap usually means one of:
+- the post hasn't been archived yet, e.g. `discourse-archive` was interrupted
+  or hasn't been re-run since the post was made
+- the topic was unlisted/hidden at the time of a previous sync and only made public
+  later, so its posts were skipped back then
+- the post was deleted or removed by moderation on the source site, in which
+  case it's gone for good and re-archiving won't bring it back
+
+Since the archive can't tell these cases apart on its own, running a full
+resync is worth doing occasionally. It'll fill in gaps caused by missed or
+previously-unlisted posts, and any gap that persists after a resync is likely
+deleted/moderated.
+
+`discourse-archive` normally does an incremental sync, only fetching posts
+created after `last_sync_date` in `<target-dir>/.metadata.json`. To force a
+full resync, delete that file before re-running.
+
+Each warning is preceded by an HTML comment `<!-- MIRROR-MISSING-POST -->`,
+so you can grep the rendered site for an overview of how many gaps exist.
+
+```sh
+% grep -rl MIRROR-MISSING-POST site/ | wc -l   # topics with at least one gap
+% grep -ro MIRROR-MISSING-POST site/*.html | wc -l  # total gaps across the mirror
+```
