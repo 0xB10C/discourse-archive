@@ -69,9 +69,18 @@ _REL_LINK_RE = re.compile(r'(?P<attr>href|src)="/(?!/)')
 _STYLE = (
     '<style>'
     'body{font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;'
-    'max-width:46rem;margin:0 auto;padding:1rem;line-height:1.5;}'
+    'max-width:56rem;margin:0 auto;padding:1rem;line-height:1.5;}'
     'img{max-width:100%;height:auto;}'
     'pre{overflow-x:auto;}'
+    'article{border:1px solid #e8e8e8;border-radius:.375rem;'
+    'padding:1rem 1.25rem;margin:0 0 2rem;background:#fff;}'
+    'article>p:first-child{margin-top:0;padding-bottom:.6rem;'
+    'margin-bottom:1rem;border-bottom:1px solid #f0f0f0;'
+    'color:#666;font-size:.9em;}'
+    'a.permalink{color:#bbb;text-decoration:none;margin-right:.35em;}'
+    'a.permalink:hover{color:#666;}'
+    'img.avatar{width:24px;height:24px;border-radius:50%;'
+    'vertical-align:middle;margin-right:.35em;}'
     # Discourse lightbox chrome: the caption bar carries unsized <svg> icons
     # that, without Discourse's CSS, fall back to the 300x150 default and leave
     # a big gap under each image. It is only useful for the JS lightbox.
@@ -106,7 +115,7 @@ _STYLE = (
     'footer.build{margin-top:3rem;padding-top:1rem;border-top:1px solid #eee;'
     'font-size:.85em;color:#888;text-align:center;}'
     '.missing-posts{border:1px solid #f0c36d;background:#fff8e6;color:#7a5b00;'
-    'border-radius:.25rem;padding:.5rem 1rem;margin:1rem 0;font-size:.9em;}'
+    'border-radius:.25rem;padding:.5rem 1rem;margin:0 0 2rem;font-size:.9em;}'
     '</style>'
 )
 
@@ -132,6 +141,21 @@ def rewrite_links(cooked: str, base_url: str) -> str:
     """Rewrite root-relative links/images to absolute URLs on the source site."""
     base = base_url.rstrip('/')
     return _REL_LINK_RE.sub(rf'\g<attr>="{base}/', cooked)
+
+
+_AVATAR_SIZE = 48
+
+
+def avatar_url(avatar_template: str, base_url: str) -> str:
+    """Absolute URL for a post author's avatar, or '' if there is none."""
+    if not avatar_template:
+        return ''
+    url = avatar_template.replace('{size}', str(_AVATAR_SIZE))
+    if url.startswith('//'):
+        return f'https:{url}'
+    if url.startswith('/'):
+        return f"{base_url.rstrip('/')}{url}"
+    return url
 
 
 _TAG_RE = re.compile(r'<[^>]+>')
@@ -167,6 +191,10 @@ class MirrorPost:
     @property
     def post_url(self) -> str:
         return self.raw.get('post_url') or ''
+
+    @property
+    def avatar_template(self) -> str:
+        return self.raw.get('avatar_template') or ''
 
     @property
     def reply_to_post_number(self) -> int | None:
@@ -258,11 +286,21 @@ def render_topic(topic: MirrorTopic, base_url: str) -> str:
     previous_post_number = None
     for post in topic.posts:
         if previous_post_number is not None:
-            parts.append(render_missing_posts(previous_post_number, post.post_number))
+            missing = render_missing_posts(previous_post_number, post.post_number)
+            if missing:
+                parts.append(missing)
         previous_post_number = post.post_number
 
+        author = f'<strong>{html.escape(post.author)}</strong>'
+        avatar = avatar_url(post.avatar_template, base_url)
+        if avatar:
+            author = (
+                f'<img class="avatar" src="{html.escape(avatar)}" alt="" '
+                f'width="24" height="24"> {author}')
+
         meta = [
-            f'<strong>{html.escape(post.author)}</strong>',
+            f'<a class="permalink" href="#post-{post.post_number}">#</a>',
+            author,
             f'<a href="{base_url}{html.escape(post.post_url)}">'
             f'#{post.post_number}</a>',
             f'<time>{html.escape(post.raw["created_at"])}</time>',
