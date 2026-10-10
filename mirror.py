@@ -13,6 +13,7 @@ import re
 import os
 import json
 import html
+import shutil
 import functools
 import datetime
 from dataclasses import dataclass, field
@@ -63,6 +64,29 @@ def args():
 # URLs untouched, and absolute (`http://...`) and anchor (`#...`) URLs don't
 # match in the first place.
 _REL_LINK_RE = re.compile(r'(?P<attr>href|src)="/(?!/)')
+
+# Matches the URL of a file uploaded to Discourse, in all its variants
+# (original, optimized/resized, extension-less download link). All variants
+# embed the SHA-1 of the original file, which the archived copy under
+# `<target-dir>/uploads/<sha1>.<ext>` is keyed on.
+#
+# Keep in sync with the copy in archive.py.
+_UPLOAD_URL_RE = re.compile(
+    r'(?:https?:)?(?://[^/"\s]+)?/uploads/(?P<db>[^/"\s]+)/'
+    r'(?:(?P<kind>original|optimized)/\dX/(?:[0-9a-f]/)*)?'
+    r'(?P<sha1>[0-9a-f]{40})'
+    r'(?:_\d+_\d+x\d+)?'
+    r'(?:\.(?P<ext>[A-Za-z0-9]+))?')
+
+# The same, but only when the URL is the entire value of an HTML attribute
+# (`src`, `href`, `data-download-href`, ...), so URLs in visible text or code
+# samples are left alone.
+_UPLOAD_ATTR_RE = re.compile(r'(?<=")' + _UPLOAD_URL_RE.pattern + r'(?=")')
+
+# A `srcset` attribute (including its leading whitespace) that references
+# uploads. Discourse emits these for lightboxed images, listing the resized
+# variants plus the original at 2x.
+_UPLOAD_SRCSET_RE = re.compile(r'\s+srcset="[^"]*/uploads/[^"]*"')
 
 
 # Minimal CSS: a centered, responsive column with a sans-serif font.
@@ -141,6 +165,62 @@ def rewrite_links(cooked: str, base_url: str) -> str:
     """Rewrite root-relative links/images to absolute URLs on the source site."""
     base = base_url.rstrip('/')
     return _REL_LINK_RE.sub(rf'\g<attr>="{base}/', cooked)
+
+
+def load_uploads(uploads_dir: Path) -> dict[str, str]:
+    """Map sha1 -> filename for the uploads archived under `uploads_dir`."""
+    if not uploads_dir.is_dir():
+        return {}
+    return {p.stem: p.name for p in uploads_dir.iterdir() if p.is_file()}
+
+
+def rewrite_uploads(cooked: str, uploads: dict[str, str], missing: set[str]) -> str:
+    """Point references to uploads at the archived copies under `uploads/`.
+
+    Only the original of each upload is archived, so every variant (the
+    resized `optimized` thumbnails, the lightbox's full-size link and download
+    link) is rewritten to the same local file, and `srcset` attributes are
+    dropped: the `<img>` keeps its width/height, so layout is unchanged and
+    the browser scales the original down.
+
+    Uploads not found in the archive are left pointing at the source site and
+    their sha1 is added to `missing`.
+    """
+    def sub_srcset(m: re.Match) -> str:
+        sha1s = {u.group('sha1') for u in _UPLOAD_URL_RE.finditer(m.group(0))}
+        return '' if any(s in uploads for s in sha1s) else m.group(0)
+
+    def sub_url(m: re.Match) -> str:
+        filename = uploads.get(m.group('sha1'))
+        if filename is None:
+            missing.add(m.group('sha1'))
+            return m.group(0)
+        return f'uploads/{filename}'
+
+    cooked = _UPLOAD_SRCSET_RE.sub(sub_srcset, cooked)
+    return _UPLOAD_ATTR_RE.sub(sub_url, cooked)
+
+
+def copy_uploads(uploads_dir: Path, output_dir: Path) -> int:
+    """Copy archived uploads into `<output-dir>/uploads`; returns the number copied.
+
+    Files already present with the same size and a mtime at least as new are
+    skipped, so re-running the mirror is cheap.
+    """
+    dest_dir = output_dir / 'uploads'
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    copied = 0
+    for src in uploads_dir.iterdir():
+        if not src.is_file():
+            continue
+        dest = dest_dir / src.name
+        if dest.exists():
+            s, d = src.stat(), dest.stat()
+            if s.st_size == d.st_size and d.st_mtime >= s.st_mtime:
+                continue
+        shutil.copy2(src, dest)
+        copied += 1
+    return copied
 
 
 def format_datetime(dt: datetime.datetime) -> str:
@@ -262,8 +342,14 @@ def render_missing_posts(previous_post_number: int, next_post_number: int) -> st
         '(not fetched, or removed/moderated on the source site)</p>')
 
 
-def render_topic(topic: MirrorTopic, base_url: str) -> str:
-    """Render a single topic (with all its posts) to an HTML document."""
+def render_topic(topic: MirrorTopic, base_url: str, uploads: dict[str, str],
+                 missing_uploads: set[str]) -> str:
+    """Render a single topic (with all its posts) to an HTML document.
+
+    `uploads` maps the sha1 of each archived upload to its filename (see
+    `load_uploads`); the sha1 of any upload referenced but not archived is
+    added to `missing_uploads`.
+    """
     title = html.escape(topic.title)
     description = html.escape(extract_description(topic.posts[0]))
     host = html.escape(source_host())
@@ -322,7 +408,8 @@ def render_topic(topic: MirrorTopic, base_url: str) -> str:
 
         parts.append(f'<article id="post-{post.post_number}">')
         parts.append('<p>' + ' &middot; '.join(meta) + '</p>')
-        parts.append(rewrite_links(post.cooked, base_url))
+        cooked = rewrite_uploads(post.cooked, uploads, missing_uploads)
+        parts.append(rewrite_links(cooked, base_url))
         parts.append('</article>')
 
     parts += [render_build_footer(), '</body>', '</html>', '']
@@ -413,10 +500,29 @@ def main() -> None:
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    uploads_dir = target_dir / 'uploads'
+    uploads = load_uploads(uploads_dir)
+    if uploads:
+        log.info("found %d archived uploads in %s", len(uploads), uploads_dir)
+    else:
+        log.warning("no archived uploads found in %s; images will point at the "
+                    "source site (run `discourse-archive --backfill-uploads`)",
+                    uploads_dir)
+    missing_uploads: set[str] = set()
+
     for topic in topics:
         full_path = output_dir / topic.filename
         log.info("rendering topic %s (%s) to %s", topic.id, topic.slug, full_path)
-        full_path.write_text(render_topic(topic, base_url))
+        full_path.write_text(render_topic(topic, base_url, uploads, missing_uploads))
+
+    if missing_uploads:
+        log.warning("%d referenced uploads are not archived; those images point "
+                    "at the source site", len(missing_uploads))
+        log.debug("missing uploads: %s", ' '.join(sorted(missing_uploads)))
+
+    if uploads:
+        copied = copy_uploads(uploads_dir, output_dir)
+        log.info("copied %d new/changed uploads to %s", copied, output_dir / 'uploads')
 
     index_path = output_dir / 'index.html'
     log.info("writing index with %d topics to %s", len(topics), index_path)

@@ -19,7 +19,8 @@ or, if you don't trust package managers:
 
 ```sh
 % discourse-archive --help
-usage: discourse-archive [-h] [-u URL] [--debug] [-t TARGET_DIR]
+usage: discourse-archive [-h] [-u URL] [--debug] [-t TARGET_DIR] [--no-uploads]
+                         [--backfill-uploads]
 
 Create a basic content archive from a Discourse installation
 
@@ -29,11 +30,20 @@ options:
   --debug
   -t TARGET_DIR, --target-dir TARGET_DIR
                         Target directory for the archive
+  --no-uploads          Don't download the files (images) uploaded to the
+                        Discourse site that newly archived posts reference
+  --backfill-uploads    Download any uploads referenced by already-archived
+                        posts that are missing from <target-dir>/uploads, then
+                        exit without syncing posts
 ```
 
 The structure that it generates looks something like:
 ```
 archive
+├── uploads
+│   ├── 0128f183608738f985c7a22cba2fc9c522f98880.jpeg
+│   ├── 455abc133e0ab553eb12218497c96491d2003a1a.png
+│   └── 836776ecd335c3cda6bb995651703a4c22997080.png
 ├── posts
 │   ├── 2022-08-August
 │   │   ├── 0000000001-system-about-the-meta-category.json
@@ -70,6 +80,38 @@ archive
     └── 2023-09-September
         └── 2023-09-05-public-archive-for-delving-bitcoin-id87.md
 ```
+
+### Uploads (images)
+
+Images (and other files) that people upload to Discourse are referenced from
+the posts' HTML by URLs like
+`https://example.org/uploads/default/original/2X/8/<sha1>.png`. Every variant
+of an upload (the original, the resized `optimized/...` thumbnails, the
+extension-less download link) embeds the SHA-1 of the original file, so each
+upload is archived once as `<target-dir>/uploads/<sha1>.<ext>`, with the
+extension taken from the server's content type. The downloaded content is
+checked against that hash. A mismatch is logged; it's saved anyway if the
+server returned an image (Discourse occasionally serves a file that differs
+from the hash it registered it under, seen with SVG onebox icons), but
+anything else, e.g. an error page, isn't saved and is retried next time.
+
+Only the original of each upload is fetched, not the resized variants. Uploads
+referenced by a post are fetched right after the post is saved, so an
+incremental sync also picks up images added when a post was edited. Pass
+`--no-uploads` to skip this.
+
+To fetch the uploads for posts archived before this feature existed, run once:
+
+```sh
+% discourse-archive --backfill-uploads
+```
+
+It scans every archived post, downloads whatever is missing from
+`<target-dir>/uploads`, and exits without syncing posts. Uploads that have been
+deleted on the source site (HTTP 404) are logged and skipped.
+
+Avatars, emoji images and images hosted on other sites are not archived; the
+mirror keeps linking to them where they live.
 
 ## Rendering an HTML mirror
 
@@ -126,11 +168,29 @@ site
 ├── index.html
 ├── 2025-10-13-about-the-meta-category-id1.html
 ├── 2025-10-14-about-the-research-category-id25.html
-└── 2026-06-18-outbound-connection-success-rates-of-a-bitcoin-node-id142.html
+├── 2026-06-18-outbound-connection-success-rates-of-a-bitcoin-node-id142.html
+└── uploads
+    ├── 0128f183608738f985c7a22cba2fc9c522f98880.jpeg
+    └── 455abc133e0ab553eb12218497c96491d2003a1a.png
 ```
 
 Re-running is idempotent - it overwrites the output directory in place, so you
 can regenerate the mirror after each sync.
+
+### Images
+
+Uploads archived under `<target-dir>/uploads` (see above) are copied into
+`<output-dir>/uploads`, and every reference to them in the posts' HTML (the
+`<img src>`, the lightbox's full-size and download links) is rewritten to the
+local copy, so the mirror's images keep working if the source site goes away.
+Since only the original of each upload is archived, the resized variants and
+`srcset` attributes are replaced by the original; the `<img>` keeps its
+width/height so the layout is unchanged.
+
+A referenced upload that isn't in the archive (not fetched yet, or deleted on
+the source site) is left pointing at the source site, and the mirror logs how
+many such references it saw. Run `discourse-archive --backfill-uploads` to
+fetch them.
 
 ### Missing posts
 

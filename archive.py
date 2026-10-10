@@ -6,11 +6,14 @@ TODO: figure out how to handle post updates.
 
 """
 import argparse
+import urllib.error
 import urllib.request
 import sys
+import re
 import time
 import os
 import json
+import hashlib
 import functools
 import datetime
 from dataclasses import dataclass
@@ -40,6 +43,14 @@ parser.add_argument(
 parser.add_argument(
     '-t', '--target-dir', help='Target directory for the archive',
     default=Path(os.environ.get('TARGET_DIR', './archive')))
+parser.add_argument(
+    '--no-uploads', action='store_true',
+    help="Don't download the files (images) uploaded to the Discourse site that "
+    "newly archived posts reference")
+parser.add_argument(
+    '--backfill-uploads', action='store_true',
+    help='Download any uploads referenced by already-archived posts that are '
+    'missing from <target-dir>/uploads, then exit without syncing posts')
 
 
 @functools.cache
@@ -70,6 +81,152 @@ def http_get_json(path) -> dict:
     except json.JSONDecodeError:
         log.warning("unable to decode JSON response from %r", path)
         raise
+
+
+# Matches the URL of a file uploaded to Discourse, as referenced from a post's
+# `cooked` HTML (in `src`, `srcset`, `href` or `data-download-href`), e.g.
+#
+#   https://example.org/uploads/default/original/2X/8/<sha1>.png
+#   https://example.org/uploads/default/optimized/2X/8/<sha1>_2_690x345.png
+#   https://example.org/uploads/default/<sha1>
+#
+# Every variant of an upload embeds the 40-hex SHA-1 of the *original* file,
+# so that's what the archived copy is keyed on: all variants map to one file.
+# The host is optional so root-relative and protocol-relative URLs match too.
+#
+# Keep in sync with the copy in mirror.py.
+UPLOAD_URL_RE = re.compile(
+    r'(?:https?:)?(?://[^/"\s]+)?/uploads/(?P<db>[^/"\s]+)/'
+    r'(?:(?P<kind>original|optimized)/\dX/(?:[0-9a-f]/)*)?'
+    r'(?P<sha1>[0-9a-f]{40})'
+    r'(?:_\d+_\d+x\d+)?'
+    r'(?:\.(?P<ext>[A-Za-z0-9]+))?')
+
+_CONTENT_TYPE_EXT = {
+    'image/png': 'png',
+    'image/jpeg': 'jpeg',
+    'image/gif': 'gif',
+    'image/webp': 'webp',
+    'image/avif': 'avif',
+    'image/svg+xml': 'svg',
+}
+
+
+def find_uploads(cooked: str) -> dict[str, str]:
+    """Map sha1 -> URL to fetch the original from, for every upload in `cooked`.
+
+    The URL of the `original` variant is preferred when the post references
+    it. Otherwise (only an `optimized` thumbnail or an extension-less download
+    link is present) we fall back to Discourse's `/uploads/<db>/<sha1>` route,
+    which serves the original for any upload given its hash.
+    """
+    base = args().url.rstrip('/')
+    found: dict[str, str] = {}
+    for m in UPLOAD_URL_RE.finditer(cooked):
+        sha1 = m.group('sha1')
+        if m.group('kind') == 'original':
+            url = m.group(0)
+            if url.startswith('//'):
+                url = f'https:{url}'
+            elif url.startswith('/'):
+                url = f'{base}{url}'
+            found[sha1] = url
+        elif sha1 not in found:
+            found[sha1] = f"{base}/uploads/{m.group('db')}/{sha1}"
+    return found
+
+
+def http_get_bytes(url: str) -> tuple[bytes, str] | None:
+    """GET `url`, returning (body, content-type).
+
+    Unlike `http_get`, a failure here is never fatal: a client error (the
+    upload was deleted, or is restricted) returns None right away, anything
+    else is retried a few times before giving up with None.
+    """
+    log.debug("HTTP GET %s", url)
+    backoff = 3
+    for attempt in range(4):
+        try:
+            with urllib.request.urlopen(url, timeout=60) as f:
+                return f.read(), f.headers.get_content_type()
+        except urllib.error.HTTPError as e:
+            if 400 <= e.code < 500 and e.code != 429:
+                log.warning("%s: HTTP %d, skipping", url, e.code)
+                return None
+            log.warning("%s: HTTP %d (attempt %d)", url, e.code, attempt + 1)
+        except Exception as e:
+            log.warning("%s: %s (attempt %d)", url, e, attempt + 1)
+        time.sleep(backoff)
+        backoff *= 2
+    log.warning("%s: giving up", url)
+    return None
+
+
+def existing_uploads(uploads_dir: Path) -> set[str]:
+    """The sha1s of the uploads already archived (files are named `<sha1>.<ext>`)."""
+    return {p.stem for p in uploads_dir.iterdir() if p.is_file()}
+
+
+def fetch_uploads(uploads: dict[str, str], uploads_dir: Path, existing: set[str]) -> None:
+    """Download the given {sha1: url} uploads that aren't archived yet.
+
+    Each file is saved as `<uploads_dir>/<sha1>.<ext>`, with the extension
+    derived from the response's content type. The body's hash is checked
+    against the sha1 in the URL. A mismatch is only tolerated (with a warning)
+    when the server did return an image: Discourse occasionally serves a file
+    that differs from the hash it was registered under (seen with SVGs it
+    re-hosts for oneboxes). Anything else, e.g. an error page served with a
+    200, is not saved, so it's retried on a later run.
+    """
+    for sha1, url in uploads.items():
+        if sha1 in existing:
+            continue
+
+        result = http_get_bytes(url)
+        if result is None:
+            continue
+        body, content_type = result
+
+        if hashlib.sha1(body).hexdigest() != sha1:
+            if content_type not in _CONTENT_TYPE_EXT:
+                log.warning("upload %s: content doesn't hash to its sha1 and isn't "
+                            "an image (got %s, %d bytes), not saving",
+                            url, content_type, len(body))
+                continue
+            log.warning("upload %s: content doesn't hash to its sha1, saving anyway "
+                        "since the server returned an image (%s, %d bytes)",
+                        url, content_type, len(body))
+
+        ext = _CONTENT_TYPE_EXT.get(content_type)
+        if not ext:
+            m = UPLOAD_URL_RE.match(url)
+            ext = (m and m.group('ext')) or 'bin'
+
+        path = uploads_dir / f'{sha1}.{ext}'
+        log.info("saving upload %s (%d bytes) to %s", url, len(body), path)
+        path.write_bytes(body)
+        existing.add(sha1)
+        time.sleep(0.2)
+
+
+def backfill_uploads(posts_dir: Path, uploads_dir: Path) -> None:
+    """Fetch every upload referenced by the archived posts that we don't have yet."""
+    uploads: dict[str, str] = {}
+    n_posts = 0
+    for path in sorted(posts_dir.glob('**/*.json')):
+        n_posts += 1
+        cooked = json.loads(path.read_text()).get('cooked') or ''
+        for sha1, url in find_uploads(cooked).items():
+            # Prefer a direct `original` URL over the by-hash fallback route.
+            if sha1 not in uploads or '/original/' in url:
+                uploads[sha1] = url
+
+    existing = existing_uploads(uploads_dir)
+    missing = {s: u for s, u in uploads.items() if s not in existing}
+    log.info("%d posts reference %d uploads, %d already archived, fetching %d",
+             n_posts, len(uploads), len(uploads) - len(missing), len(missing))
+    fetch_uploads(missing, uploads_dir, existing)
+    log.info("done: %d uploads archived in %s", len(existing_uploads(uploads_dir)), uploads_dir)
 
 
 class PostSlug:
@@ -168,6 +325,13 @@ def main() -> None:
 
     (posts_dir := target_dir / 'posts').mkdir(parents=True, exist_ok=True)
     (topics_dir := target_dir / 'rendered-topics').mkdir(parents=True, exist_ok=True)
+    (uploads_dir := target_dir / 'uploads').mkdir(parents=True, exist_ok=True)
+
+    if args().backfill_uploads:
+        backfill_uploads(posts_dir, uploads_dir)
+        return
+
+    archived_uploads = existing_uploads(uploads_dir)
 
     metadata_file = target_dir / '.metadata.json'
     last_sync_date = None
@@ -207,6 +371,9 @@ def main() -> None:
                     break
 
             post.save(posts_dir)
+            if not args().no_uploads:
+                fetch_uploads(find_uploads(post.raw.get('cooked') or ''),
+                              uploads_dir, archived_uploads)
 
             if not max_created_at:
                 # Set in this way because the first /post.json result returned will be
