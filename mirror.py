@@ -1513,6 +1513,56 @@ _TOGGLE_SCRIPT = (
     'try{localStorage.setItem("theme",next)}catch(e){}});</script>')
 
 
+# Drawn in place of an avatar that can't be loaded. Avatars are not archived
+# -- they are the source site's own images, and the mirror keeps linking to
+# them there -- so a site that has gone away, a reader who is offline, or a
+# user who has since changed their picture would otherwise leave the page full
+# of broken-image icons.
+#
+# What gets drawn is a letter avatar, the same idea Discourse uses for users
+# without a picture: the initial on a colour derived from the name, so every
+# name gets its own and the same name gets the same one on every page. The
+# name's hash picks both a hue and one of three lightnesses, which is enough
+# for the few hundred people in an archive to come out nearly all distinct.
+# It is built as an SVG data URI, so there is no file to fetch and nothing to
+# write into the output.
+#
+# One listener on the document does this, rather than an `onerror` on each of
+# the thousands of avatars in a mirror. It has to capture, since an image's
+# error event doesn't bubble, and it has to be registered in <head>, before
+# the first <img> is parsed. `data-fallback` keeps a placeholder that somehow
+# fails in turn from looping.
+#
+# The name comes from whichever the mirror has: `data-avatar-name` where the
+# alt text is deliberately empty, the alt text otherwise, and for the avatars
+# inside a quoted post, the `data-username` Discourse puts on the quote.
+_AVATAR_FALLBACK_SCRIPT = (
+    '<script>(function(){'
+    'function esc(c){return c==="&"?"&amp;":c==="<"?"&lt;":c===">"?"&gt;":c}'
+    'function avatar(name){'
+    'var h=0,i;'
+    'for(i=0;i<name.length;i++)h=(h*31+name.charCodeAt(i))|0;'
+    'h=Math.abs(h);'
+    'var hue=h%360,light=[38,44,50][Math.floor(h/360)%3];'
+    'var c=esc((name.trim().charAt(0)||"?").toUpperCase());'
+    'return "data:image/svg+xml,"+encodeURIComponent('
+    '\'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48">\''
+    '+\'<circle cx="24" cy="24" r="24" fill="hsl(\'+hue+\',42%,\''
+    '+light+\'%)"/>\''
+    '+\'<text x="24" y="33" fill="#fff" font-family="sans-serif"\''
+    '+\' font-size="26" font-weight="600"\''
+    '+\' text-anchor="middle">\'+c+\'</text></svg>\');}'
+    'document.addEventListener("error",function(e){'
+    'var t=e.target;'
+    'if(t.tagName!=="IMG"||!t.classList.contains("avatar")'
+    '||t.dataset.fallback)return;'
+    't.dataset.fallback="1";'
+    'var q=t.closest("[data-username]");'
+    't.src=avatar(t.dataset.avatarName||t.alt'
+    '||(q&&q.dataset.username)||"?");'
+    '},true);})();</script>')
+
+
 # The pages the header links to, as (filename, label). Whichever of them is
 # being rendered is marked as the current page.
 _NAV = (
@@ -1556,6 +1606,7 @@ def render_document(title: str, body: list[str], *, head: list[str] = [],
         f'<title>{html.escape(title)}</title>',
         '<link rel="stylesheet" href="style.css">',
         _THEME_SCRIPT,
+        _AVATAR_FALLBACK_SCRIPT,
         *head,
         '</head>',
         f'<body class="{body_class}">' if body_class else '<body>',
@@ -1577,8 +1628,9 @@ def render_post(post: MirrorPost, base_url: str, uploads: dict[str, str],
     """Render one post: an avatar gutter next to the author line and body."""
     avatar = avatar_url(post.avatar_template, base_url)
     gutter = (
-        f'<img src="{html.escape(avatar)}" alt="" width="45" height="45" '
-        'loading="lazy">' if avatar else '')
+        f'<img class="avatar" src="{html.escape(avatar)}" alt="" '
+        f'data-avatar-name="{html.escape(post.author)}" '
+        'width="45" height="45" loading="lazy">' if avatar else '')
 
     info = [
         f'<a href="{base_url}{html.escape(post.post_url)}">#{post.post_number}</a>',
@@ -1626,8 +1678,9 @@ def render_participants(topic: MirrorTopic, base_url: str) -> str:
         avatar = avatar_url(post.avatar_template, base_url)
         n = len(posts)
         label = f'{post.author}: {n} {"post" if n == 1 else "posts"}'
-        face = (f'<img src="{html.escape(avatar)}" alt="" width="25" '
-                'height="25" loading="lazy">' if avatar else '')
+        face = (f'<img class="avatar" src="{html.escape(avatar)}" '
+                f'alt="{html.escape(post.author)}" '
+                'width="25" height="25" loading="lazy">' if avatar else '')
         chips.append(
             f'<a class="participant" href="{base_url}/u/{html.escape(username)}" '
             f'title="{html.escape(label)}">{face}'
@@ -1787,7 +1840,7 @@ def render_posters(topic: MirrorTopic, base_url: str) -> str:
         elif role == 'latest':
             title += ' (posted last)'
         faces.append(
-            f'<img class="poster{" " + role if role else ""}" '
+            f'<img class="avatar poster{" " + role if role else ""}" '
             f'src="{html.escape(avatar)}" '
             f'alt="{html.escape(post.author)}" title="{title}" '
             'width="25" height="25" loading="lazy">')
