@@ -231,6 +231,12 @@ original poster first and whoever posted last at the end, both marked, with
 the most prolific posters in between), the reply count, the view count, and
 how long ago the topic was last active.
 
+Above the list is a filter box: typing in it narrows the list to the topics
+whose title, category or tags contain every word typed. It filters what is
+already on the page, so it is instant and needs no index, but it only sees
+titles -- it is not a full-text search of the posts. Without JavaScript the
+box isn't shown and the full list is there as it always was.
+
 The category, the tags and the view count come from the archived topic
 metadata, so they are only there for an archive that has it -- see
 [Topic metadata](#topic-metadata) above and `discourse-archive

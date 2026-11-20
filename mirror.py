@@ -568,6 +568,46 @@ img.poster.latest {
   }
 }
 
+.topic-filter {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+}
+
+.topic-filter input {
+  flex: 1 1 auto;
+  max-width: 24rem;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid var(--primary-low-mid);
+  border-radius: 0.25rem;
+  background: var(--secondary);
+  color: var(--primary);
+  font-family: inherit;
+  font-size: 0.95em;
+}
+
+.topic-filter input:focus {
+  outline: 2px solid var(--tertiary);
+  outline-offset: -1px;
+}
+
+.filter-count {
+  color: var(--primary-medium);
+  font-size: 0.9em;
+}
+
+.filter-empty {
+  color: var(--primary-medium);
+  padding: 1rem 0;
+}
+
+/* The stacked layout of a narrow screen gives rows a `display` of their own,
+ * which would otherwise win over the browser's rule for `[hidden]`. */
+.topic-list tbody tr[hidden] {
+  display: none;
+}
+
 /* --- Topic page ----------------------------------------------------- */
 
 .topic .wrap {
@@ -1729,9 +1769,46 @@ def render_tags(tags: list[MirrorTag]) -> str:
         f'{html.escape(t.name)}</a>' for t in tags)
 
 
+# Narrows a topic list as you type, matching every whitespace-separated word
+# against the title, category and tags the renderer put in `data-filter`. The
+# box starts out hidden and is revealed here, so a browser without JavaScript
+# isn't offered a control that does nothing.
+_FILTER_SCRIPT = (
+    '<script>(function(){'
+    'var box=document.querySelector(".topic-filter");if(!box)return;'
+    'var input=box.querySelector("input"),count=box.querySelector(".filter-count"),'
+    'empty=document.querySelector(".filter-empty"),'
+    'rows=Array.prototype.slice.call('
+    'document.querySelectorAll(".topic-list tbody tr"));'
+    'function apply(){'
+    'var terms=input.value.toLowerCase().split(/\\s+/).filter(Boolean),shown=0;'
+    'rows.forEach(function(row){'
+    'var hay=row.dataset.filter,hit=terms.every(function(t){'
+    'return hay.indexOf(t)!==-1});'
+    'row.hidden=!hit;if(hit)shown++});'
+    'count.textContent=terms.length?shown+" of "+rows.length+" topics":"";'
+    'empty.hidden=shown>0;'
+    '}'
+    'input.addEventListener("input",apply);'
+    'box.hidden=false;apply();})();</script>')
+
+
+def filter_text(topic: MirrorTopic) -> str:
+    """What the filter box matches a topic against."""
+    words = [topic.title, *(t.name for t in topic.tags)]
+    if topic.category:
+        words.append(topic.category.full_name)
+    return ' '.join(words).lower()
+
+
 def render_topic_list(topics: list[MirrorTopic], base_url: str) -> list[str]:
     """Discourse's topic list: title, who took part, replies, views, activity."""
     parts = [
+        '<div class="topic-filter" hidden>',
+        '<input type="search" placeholder="Filter by title, category or tag"'
+        ' aria-label="Filter topics" autocomplete="off">',
+        '<span class="filter-count"></span>',
+        '</div>',
         '<table class="topic-list">',
         '<thead><tr>',
         '<th class="topic-list-title">Topic</th>',
@@ -1748,7 +1825,7 @@ def render_topic_list(topics: list[MirrorTopic], base_url: str) -> list[str]:
         activity = topic.last_activity
         views = topic.views
         parts += [
-            '<tr>',
+            f'<tr data-filter="{html.escape(filter_text(topic))}">',
             '<td class="topic-list-title">'
             f'<a class="title" href="{html.escape(topic.filename)}">'
             f'{html.escape(topic.title)}</a>'
@@ -1765,7 +1842,12 @@ def render_topic_list(topics: list[MirrorTopic], base_url: str) -> list[str]:
             '</tr>',
         ]
 
-    parts += ['</tbody>', '</table>']
+    parts += [
+        '</tbody>',
+        '</table>',
+        '<p class="filter-empty" hidden>No topics match that filter.</p>',
+        _FILTER_SCRIPT,
+    ]
     return parts
 
 
