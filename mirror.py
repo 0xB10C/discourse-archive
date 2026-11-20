@@ -19,6 +19,7 @@ import os
 import json
 import html
 import shutil
+import urllib.request
 import functools
 import datetime
 import dataclasses
@@ -39,6 +40,35 @@ except ImportError:
 log = logging.getLogger('mirror')
 
 
+# Where KaTeX is fetched from when `--katex` is given no source. KaTeX is a
+# fifth of MathJax's size and renders synchronously; what it costs is a
+# handful of TeX constructs it doesn't implement, which it draws as the source
+# in red rather than failing.
+KATEX_VERSION = '0.19.1'
+KATEX_URL = f'https://cdnjs.cloudflare.com/ajax/libs/KaTeX/{KATEX_VERSION}/'
+
+# The faces KaTeX's stylesheet asks for. It names `.woff2`, `.woff` and
+# `.ttf` for each; only the first is vendored, since every browser that runs
+# the mirror's JavaScript reads woff2 and so never asks for the others.
+_KATEX_FONTS = (
+    'AMS-Regular', 'Caligraphic-Bold', 'Caligraphic-Regular', 'Fraktur-Bold',
+    'Fraktur-Regular', 'Main-Bold', 'Main-BoldItalic', 'Main-Italic',
+    'Main-Regular', 'Math-BoldItalic', 'Math-Italic', 'SansSerif-Bold',
+    'SansSerif-Italic', 'SansSerif-Regular', 'Script-Regular',
+    'Size1-Regular', 'Size2-Regular', 'Size3-Regular', 'Size4-Regular',
+    'Typewriter-Regular',
+)
+
+# Where the vendored copy lives, relative to the output directory. The
+# stylesheet looks for its fonts in `fonts/` beside itself, so the layout has
+# to match KaTeX's own.
+KATEX_DIR = 'katex'
+_KATEX_SCRIPT = f'{KATEX_DIR}/katex.min.js'
+_KATEX_STYLESHEET = f'{KATEX_DIR}/katex.min.css'
+_KATEX_FILES = ('katex.min.js', 'katex.min.css') + tuple(
+    f'fonts/KaTeX_{name}.woff2' for name in _KATEX_FONTS)
+
+
 parser = argparse.ArgumentParser(
     'discourse-mirror',
     description='Render a static HTML mirror from a Discourse archive')
@@ -54,6 +84,12 @@ parser.add_argument(
 parser.add_argument(
     '-o', '--output-dir', help='Directory to write the rendered site into',
     default=Path(os.environ.get('OUTPUT_DIR', './site')))
+parser.add_argument(
+    '--katex', nargs='?', const=KATEX_URL, metavar='SRC',
+    help='Render the TeX in posts with KaTeX. KaTeX is copied into '
+    '<output-dir>/katex so the mirror stays self-contained; SRC is where to '
+    "get it from, either a local directory holding KaTeX's dist files or a "
+    f'URL to download them from (default: {KATEX_URL})')
 parser.add_argument(
     '-s', '--site-url', help='URL where the mirror itself will be deployed '
     '(used for og:url tags). Optional.',
@@ -984,6 +1020,24 @@ div.math {
   white-space: pre-wrap;
 }
 
+/* KaTeX draws in the inherited text colour, so it follows the page into dark
+ * mode on its own; all it needs is somewhere to go when a display equation is
+ * wider than the column. */
+.katex-display {
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 0.3rem 0;
+}
+
+/* Once a formula has been typeset, the styling that made its TeX source
+ * legible as code would only fight the result. */
+.math-rendered {
+  padding: 0;
+  background: none;
+  font-family: inherit;
+  white-space: normal;
+}
+
 .discourse-local-date {
   background: var(--primary-very-low);
   padding: 0.1em 0.3em;
@@ -1459,6 +1513,122 @@ class MirrorTopic:
         return max((self.meta.get('posts_count') or len(self.posts)) - 1, 0)
 
 
+def _fetch_katex_file(source: str, relative: str, dest: Path) -> bool:
+    """Put one of KaTeX's files at `dest`, copied or downloaded from `source`."""
+    if '://' not in source:
+        local = Path(source) / relative
+        if not local.is_file():
+            log.error("--katex: no such file: %s", local)
+            return False
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(local, dest)
+        return True
+
+    url = source.rstrip('/') + '/' + relative
+    try:
+        with urllib.request.urlopen(url, timeout=60) as response:
+            body = response.read()
+    except Exception as e:
+        log.warning("could not download %s: %s", url, e)
+        return False
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_bytes(body)
+    return True
+
+
+def provide_katex(output_dir: Path) -> bool:
+    """Put KaTeX in the output directory; True if the pages can use it.
+
+    `--katex` takes either a local directory holding KaTeX's dist files or a
+    URL to download them from (the default). Files already there are left
+    alone, so only the first run after the output directory is wiped needs
+    the network.
+
+    The script and the stylesheet are what the pages need, and a run gives up
+    as soon as one of them can't be had; a font that is missing costs the
+    glyphs it carries, not the typesetting, so it is only warned about.
+    """
+    source = str(args().katex)
+    dest_dir = output_dir / KATEX_DIR
+
+    missing = [f for f in _KATEX_FILES if not (dest_dir / f).is_file()]
+    if not missing:
+        log.info("using the KaTeX already at %s", dest_dir)
+        return True
+
+    log.info("fetching %d KaTeX files from %s", len(missing), source)
+    failed = []
+    for relative in missing:
+        if _fetch_katex_file(source, relative, dest_dir / relative):
+            continue
+        # The script and the stylesheet are the two there is no point going
+        # on without, so a run against a source that hasn't got them says so
+        # once instead of failing its way through twenty fonts.
+        if relative in ('katex.min.js', 'katex.min.css'):
+            log.warning("could not get KaTeX's %s; the TeX in posts will be "
+                        "left as it is", relative)
+            return False
+        failed.append(relative)
+
+    if failed:
+        log.warning("%d of KaTeX's fonts could not be had; formulas will be "
+                    "typeset with whatever the browser substitutes",
+                    len(failed))
+
+    total = sum(f.stat().st_size for f in dest_dir.glob('**/*') if f.is_file())
+    log.info("KaTeX is %d KiB in %s", total // 1024, dest_dir)
+    return True
+
+
+# Discourse's math plugin wraps TeX in `<span class="math">` (inline) and
+# `<div class="math">` (display), leaving it to the client to typeset.
+_MATH_RE = re.compile(r'<(?:span|div) class="math"')
+
+
+def has_math(topic: 'MirrorTopic') -> bool:
+    return any(_MATH_RE.search(post.cooked) for post in topic.posts)
+
+
+def render_katex() -> list[str]:
+    """The stylesheet and scripts that typeset a page's math.
+
+    KaTeX can be pointed at a page to find TeX by its delimiters, which would
+    be a poor fit here: the posts are prose about Bitcoin, full of code and
+    dollar amounts that are not math. Only the `.math` elements Discourse
+    marked are rendered, and in document order sharing one set of macros, so
+    that what a post defines with \\newcommand still applies to the formulas
+    below it.
+
+    `throwOnError` is off: the handful of TeX constructs KaTeX doesn't
+    implement are then drawn as their source in red, which is visible and
+    local, rather than losing the rest of the page.
+
+    KaTeX itself is deferred, so fetching it doesn't hold up the page. The
+    typesetting then waits for `DOMContentLoaded`, which a deferred script is
+    guaranteed to run before -- `defer` on an inline script does nothing, so
+    without the wait this would run while the document was still parsing and
+    find no KaTeX at all.
+
+    Without JavaScript every element keeps its TeX source, which is what the
+    mirror shows without the flag.
+    """
+    render = (
+        '<script>document.addEventListener("DOMContentLoaded",function(){'
+        'if(!window.katex)return;'
+        'var macros={},m=document.querySelectorAll("span.math,div.math"),i;'
+        'for(i=0;i<m.length;i++){try{'
+        'katex.render(m[i].textContent,m[i],{'
+        'displayMode:m[i].tagName==="DIV",macros:macros,globalGroup:true,'
+        'throwOnError:false,strict:false});'
+        'm[i].className+=" math-rendered";'
+        '}catch(e){}}});</script>')
+    return [
+        f'<link rel="stylesheet" href="{_KATEX_STYLESHEET}">',
+        f'<script defer src="{_KATEX_SCRIPT}"></script>',
+        render,
+    ]
+
+
 def render_missing_posts(previous_post_number: int, next_post_number: int) -> str:
     """Warning box for post numbers missing between two consecutive posts.
 
@@ -1743,7 +1913,7 @@ def render_incomplete_topic(topic: MirrorTopic) -> str:
 
 
 def render_topic(topic: MirrorTopic, base_url: str, uploads: dict[str, str],
-                 missing_uploads: set[str]) -> str:
+                 missing_uploads: set[str], katex: bool = False) -> str:
     """Render a single topic (with all its posts) to an HTML document.
 
     `uploads` maps the sha1 of each archived upload to its filename (see
@@ -1763,6 +1933,9 @@ def render_topic(topic: MirrorTopic, base_url: str, uploads: dict[str, str],
         f'<meta property="og:site_name" content="{html.escape(archive_title())}">',
         f'<meta property="og:url" content="{og_url}">',
     ]
+    # Only the topics that have TeX in them pay for the KaTeX download.
+    if katex and has_math(topic):
+        head += render_katex()
 
     badges = render_category_badge(topic.category) + render_tags(topic.tags)
     body = [
@@ -2198,10 +2371,13 @@ def main() -> None:
                     uploads_dir)
     missing_uploads: set[str] = set()
 
+    katex = provide_katex(output_dir) if args().katex else False
+
     for topic in topics:
         full_path = output_dir / topic.filename
         log.info("rendering topic %s (%s) to %s", topic.id, topic.slug, full_path)
-        full_path.write_text(render_topic(topic, base_url, uploads, missing_uploads))
+        full_path.write_text(
+            render_topic(topic, base_url, uploads, missing_uploads, katex))
 
     incomplete = [t for t in topics
                   if (t.meta.get('posts_count') or 0) > len(t.posts)]

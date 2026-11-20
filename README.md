@@ -166,7 +166,7 @@ the only script on it is the few lines behind the light/dark toggle.
 ```sh
 % ./mirror.py --help
 usage: discourse-mirror [-h] [-u URL] [--debug] [-t TARGET_DIR] [-o OUTPUT_DIR]
-                        [-s SITE_URL]
+                        [--katex [SRC]] [-s SITE_URL]
 
 Render a static HTML mirror from a Discourse archive
 
@@ -179,6 +179,12 @@ options:
                         Directory of the archive to read
   -o OUTPUT_DIR, --output-dir OUTPUT_DIR
                         Directory to write the rendered site into
+  --katex [SRC]         Render the TeX in posts with KaTeX. KaTeX is copied
+                        into <output-dir>/katex so the mirror stays self-
+                        contained; SRC is where to get it from, either a local
+                        directory holding KaTeX's dist files or a URL to
+                        download them from (default:
+                        https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.19.1/)
   -s SITE_URL, --site-url SITE_URL
                         URL where the mirror itself will be deployed (used for
                         og:url tags). Optional.
@@ -207,6 +213,11 @@ entirely.
 The generated structure looks like:
 ```
 site
+├── katex
+│   ├── fonts
+│   │   └── KaTeX_Main-Regular.woff2
+│   ├── katex.min.css
+│   └── katex.min.js
 ├── index.html
 ├── top.html
 ├── categories.html
@@ -349,6 +360,50 @@ A referenced upload that isn't in the archive (not fetched yet, or deleted on
 the source site) is left pointing at the source site, and the mirror logs how
 many such references it saw. Run `discourse-archive --backfill-uploads` to
 fetch them.
+
+### Math
+
+Sites running Discourse's math plugin leave the TeX in posts for the browser
+to typeset: it arrives in the archive as `<span class="math">` (inline) and
+`<div class="math">` (display) around the TeX source. The mirror shows that
+source as code, which beats showing it as prose but is still not the formula.
+
+`--katex` typesets it:
+
+```sh
+% ./mirror.py -t ./archive -o ./site --katex
+```
+
+KaTeX is copied into `<output-dir>/katex` -- the script, the stylesheet and
+the twenty font faces the stylesheet asks for, about 540 KB in all -- and the
+pages link to that, so the mirror doesn't depend on a CDN. The files are
+downloaded once, from cdnjs; any already in the output directory are left
+alone, and passing a directory instead (`--katex ./katex-dist`) uses a copy
+you already have and keeps the run offline. Only the `.woff2` of each face is
+vendored: a browser that runs the mirror's JavaScript reads woff2, so it never
+asks for the `.woff` and `.ttf` the stylesheet also names.
+
+Only the topics that actually contain TeX link to KaTeX (108 of the 556 in the
+delvingbitcoin archive), so the rest of the mirror stays as light as it was.
+
+KaTeX can be pointed at a page to find TeX by its delimiters, which would be
+wrong here: the posts are prose full of code and dollar amounts. Only the
+elements Discourse marked as math are rendered, in document order and sharing
+one set of macros, so what a post defines with `\newcommand` still applies to
+the formulas below it.
+
+A few TeX constructs KaTeX doesn't implement are drawn as their source in red,
+with the reason in the tooltip, rather than taking the page down with them --
+17 of the delvingbitcoin archive's 5,459 formulas, on 6 of its 108 maths
+topics. MathJax renders those, at four times the download; if an archive
+leans on them, it is the better trade.
+
+KaTeX itself is loaded with `defer`, so fetching it doesn't hold up the page,
+and the typesetting waits for `DOMContentLoaded` -- which a deferred script is
+guaranteed to run before.
+
+Without JavaScript, or if KaTeX fails to load, every formula is left holding
+its TeX source, exactly as it renders without the flag.
 
 ### Missing posts
 
