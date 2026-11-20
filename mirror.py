@@ -101,6 +101,7 @@ STYLESHEET = '''/* The mirror's stylesheet.
  */
 
 :root {
+  color-scheme: light;
   --primary: #222222;
   --primary-medium: #646464;
   --primary-low-mid: #999999;
@@ -118,6 +119,45 @@ STYLESHEET = '''/* The mirror's stylesheet.
     "Helvetica Neue", Arial, sans-serif;
   --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
     "Liberation Mono", monospace;
+}
+
+/* Discourse's default dark scheme, used when the viewer's system asks for a
+ * dark theme and they haven't overridden it here... */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --primary: #dddddd;
+    --primary-medium: #9b9b9b;
+    --primary-low-mid: #767676;
+    --primary-low: #333333;
+    --primary-very-low: #1e1e1e;
+    --secondary: #111111;
+    --tertiary: #3c9fd4;
+    --tertiary-low: #17313d;
+    --highlight-low: #4a3c16;
+    --warning-bg: #302812;
+    --warning-border: #7a5b00;
+    --warning-text: #e3c66d;
+    --shadow: rgba(0, 0, 0, 0.5);
+  }
+}
+
+/* ...and whenever they pick dark with the header's toggle. */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --primary: #dddddd;
+  --primary-medium: #9b9b9b;
+  --primary-low-mid: #767676;
+  --primary-low: #333333;
+  --primary-very-low: #1e1e1e;
+  --secondary: #111111;
+  --tertiary: #3c9fd4;
+  --tertiary-low: #17313d;
+  --highlight-low: #4a3c16;
+  --warning-bg: #302812;
+  --warning-border: #7a5b00;
+  --warning-text: #e3c66d;
+  --shadow: rgba(0, 0, 0, 0.5);
 }
 
 * {
@@ -205,6 +245,64 @@ a:hover {
   background: var(--primary-very-low);
   color: var(--primary);
   font-weight: 600;
+}
+
+/* The header's light/dark toggle. It shows the theme it would switch *to*,
+ * which is also why the icons are swapped in CSS rather than in script: the
+ * right one shows before any JavaScript runs. */
+.theme-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+  border: 0;
+  border-radius: 0.25rem;
+  background: none;
+  color: var(--primary-medium);
+  cursor: pointer;
+}
+
+.theme-toggle:hover {
+  background: var(--primary-very-low);
+  color: var(--primary);
+}
+
+.theme-toggle svg {
+  width: 1.15rem;
+  height: 1.15rem;
+  fill: currentColor;
+}
+
+.theme-toggle .sun {
+  display: none;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .theme-toggle .sun {
+    display: block;
+  }
+
+  :root:not([data-theme="light"]) .theme-toggle .moon {
+    display: none;
+  }
+}
+
+:root[data-theme="dark"] .theme-toggle .sun {
+  display: block;
+}
+
+:root[data-theme="dark"] .theme-toggle .moon {
+  display: none;
+}
+
+:root[data-theme="light"] .theme-toggle .sun {
+  display: none;
+}
+
+:root[data-theme="light"] .theme-toggle .moon {
+  display: block;
 }
 
 main {
@@ -860,6 +958,37 @@ def archive_title() -> str:
     return f'Archive of {source_host()}'
 
 
+# Sun and moon glyphs for the theme toggle.
+_SUN_ICON = (
+    '<svg class="sun" viewBox="0 0 24 24" aria-hidden="true">'
+    '<circle cx="12" cy="12" r="4.5"/>'
+    '<path fill="none" stroke="currentColor" stroke-width="2" '
+    'stroke-linecap="round" d="M12 1.5v3M12 19.5v3M1.5 12h3M19.5 12h3'
+    'M4.5 4.5l2.1 2.1M17.4 17.4l2.1 2.1M19.5 4.5l-2.1 2.1M6.6 17.4l-2.1 2.1"/>'
+    '</svg>')
+_MOON_ICON = (
+    '<svg class="moon" viewBox="0 0 24 24" aria-hidden="true">'
+    '<path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/>'
+    '</svg>')
+
+# Applies the viewer's saved theme before the page is painted, so switching
+# to dark doesn't flash a white page on every navigation. Without JavaScript
+# (or before this runs) the page follows `prefers-color-scheme`.
+_THEME_SCRIPT = (
+    '<script>try{var t=localStorage.getItem("theme");'
+    'if(t)document.documentElement.dataset.theme=t}catch(e){}</script>')
+
+# Flips between light and dark, starting from whatever the page is showing
+# now, and remembers the choice for the rest of the mirror.
+_TOGGLE_SCRIPT = (
+    '<script>document.querySelector(".theme-toggle").addEventListener("click",'
+    'function(){var r=document.documentElement,'
+    'now=r.dataset.theme||(window.matchMedia("(prefers-color-scheme: dark)")'
+    '.matches?"dark":"light"),next=now==="dark"?"light":"dark";'
+    'r.dataset.theme=next;'
+    'try{localStorage.setItem("theme",next)}catch(e){}});</script>')
+
+
 def render_header() -> str:
     """The site header shared by every page."""
     base_url = html.escape(args().url.rstrip('/'))
@@ -869,6 +998,9 @@ def render_header() -> str:
         '<nav class="site-nav">'
         f'<a href="{base_url}">{html.escape(source_host())} &#8599;</a>'
         '</nav>'
+        '<button class="theme-toggle" type="button" title="Switch between '
+        'light and dark" aria-label="Switch between light and dark">'
+        f'{_SUN_ICON}{_MOON_ICON}</button>'
         '</div></header>')
 
 
@@ -883,6 +1015,7 @@ def render_document(title: str, body: list[str], *, head: list[str] = [],
         '<meta name="viewport" content="width=device-width, initial-scale=1">',
         f'<title>{html.escape(title)}</title>',
         '<link rel="stylesheet" href="style.css">',
+        _THEME_SCRIPT,
         *head,
         '</head>',
         f'<body class="{body_class}">' if body_class else '<body>',
@@ -891,6 +1024,7 @@ def render_document(title: str, body: list[str], *, head: list[str] = [],
         *body,
         '</div></main>',
         render_build_footer(),
+        _TOGGLE_SCRIPT,
         '</body>',
         '</html>',
         '',

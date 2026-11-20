@@ -158,8 +158,9 @@ Once you have an archive, `mirror.py` renders it into a static HTML site you can
 serve anywhere. It reads the per-post JSON under `<target-dir>/posts`, groups the
 posts into topics, and writes one HTML page per topic (using Discourse's
 server-rendered `cooked` HTML) plus a flat `index.html` listing topics with the
-most recently active first. There is no JavaScript and no external dependency:
-a page is its HTML plus the mirror's own `style.css`.
+most recently active first. There is no external dependency: a page is its
+HTML plus the mirror's own `style.css`, and the only script on it is the few
+lines behind the light/dark toggle.
 
 ```sh
 % ./mirror.py --help
@@ -229,6 +230,18 @@ footnotes.
 It is all one stylesheet, `style.css`, written into the output directory next
 to the pages and regenerated on every run. To restyle the mirror, edit
 `STYLESHEET` in `mirror.py`.
+
+Pages come in a light and a dark theme, following Discourse's own two default
+color schemes. Which one a viewer gets is their system preference
+(`prefers-color-scheme`) unless they pick one with the toggle in the header,
+which is remembered (in `localStorage`) for the rest of the mirror. The choice
+is applied before the page is painted, so navigating the mirror in dark mode
+doesn't flash white.
+
+Both themes are defined as custom properties at the top of the stylesheet --
+the same color roles Discourse uses, `--primary` for text, `--secondary` for
+the background, `--tertiary` for links -- so a different palette is a matter
+of changing those values.
 
 ### Images
 
