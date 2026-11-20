@@ -207,7 +207,11 @@ The generated structure looks like:
 ```
 site
 ├── index.html
+├── categories.html
+├── tags.html
 ├── style.css
+├── c-research-id25.html
+├── tag-mempool.html
 ├── 2025-10-13-about-the-meta-category-id1.html
 ├── 2025-10-14-about-the-research-category-id25.html
 ├── 2026-06-18-outbound-connection-success-rates-of-a-bitcoin-node-id142.html
@@ -237,6 +241,23 @@ Reply and view counts are what the source site reported for the topic when it
 was last synced, so a topic whose posts aren't all archived still shows how
 many replies it really has. The avatars, like emoji, are not archived: they
 are loaded from the source site.
+
+### Browsing by category and tag
+
+The header links to a category list and a tag list, both built from the
+archived topic metadata:
+
+- `categories.html` -- a card per category with its description and how many
+  of its topics are archived, subcategories listed under their parent
+- `c-<slug>-id<id>.html` -- the topics in one category; a parent category's
+  page also lists its subcategories' topics, as Discourse's does
+- `tags.html` -- every tag in use, most used first
+- `tag-<slug>.html` -- the topics carrying one tag
+
+The category badge and the tags under a topic's title link to these pages.
+Only categories and tags that archived topics actually use get a page, so
+there are no links that lead nowhere; for an archive with no topic metadata
+both lists are simply empty.
 
 ### Styling
 

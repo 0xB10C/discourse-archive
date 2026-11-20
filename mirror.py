@@ -337,6 +337,87 @@ footer.build {
   text-align: center;
 }
 
+/* --- Category and tag pages ----------------------------------------- */
+
+.category-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(20rem, 1fr));
+  gap: 1rem;
+}
+
+.category-card {
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--primary-low);
+  border-left: 6px solid var(--category-color, var(--primary-low-mid));
+  border-radius: 0.25rem;
+}
+
+.category-card h2 {
+  margin: 0 0 0.35rem;
+  font-size: 1.1rem;
+}
+
+.category-card h2 a {
+  color: var(--primary);
+}
+
+.category-description {
+  margin: 0 0 0.5rem;
+  color: var(--primary-medium);
+  font-size: 0.9em;
+}
+
+.category-count {
+  margin: 0;
+  color: var(--primary-low-mid);
+  font-size: 0.85em;
+}
+
+.subcategories {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-top: 0.6rem;
+}
+
+.tag-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.tag-list .discourse-tag {
+  font-size: 0.95em;
+  padding: 0.25rem 0.6rem;
+}
+
+.tag-count {
+  margin-left: 0.4rem;
+  color: var(--primary-low-mid);
+  font-size: 0.85em;
+}
+
+a.discourse-tag:hover,
+a.badge-category:hover {
+  background: var(--tertiary-low);
+  color: var(--primary);
+  text-decoration: none;
+}
+
+/* The header's link off to the source site sits apart from the mirror's own
+ * pages, and is the first thing to drop on a narrow screen. */
+.site-nav .source-link {
+  margin-left: 0.5rem;
+  border-left: 1px solid var(--primary-low);
+  padding-left: 0.85rem;
+}
+
+@media (max-width: 34rem) {
+  .site-nav .source-link {
+    display: none;
+  }
+}
+
 /* --- Topic list ----------------------------------------------------- */
 
 .topic-list {
@@ -1114,6 +1195,10 @@ class MirrorTag:
             return cls(name, tag.get('slug') or slugify(name))
         return cls(tag, slugify(tag))
 
+    @property
+    def filename(self) -> str:
+        return f'tag-{self.slug}.html'
+
 
 @dataclass(frozen=True)
 class MirrorCategory:
@@ -1132,6 +1217,10 @@ class MirrorCategory:
         if self.parent:
             return f'{self.parent.name} / {self.name}'
         return self.name
+
+    @property
+    def filename(self) -> str:
+        return f'c-{self.slug}-id{self.id}.html'
 
 
 def load_categories(path: Path) -> dict[int, MirrorCategory]:
@@ -1295,14 +1384,29 @@ _TOGGLE_SCRIPT = (
     'try{localStorage.setItem("theme",next)}catch(e){}});</script>')
 
 
-def render_header() -> str:
+# The pages the header links to, as (filename, label). Whichever of them is
+# being rendered is marked as the current page.
+_NAV = (
+    ('index.html', 'Topics'),
+    ('categories.html', 'Categories'),
+    ('tags.html', 'Tags'),
+)
+
+
+def render_header(active: str = '') -> str:
     """The site header shared by every page."""
     base_url = html.escape(args().url.rstrip('/'))
+    links = []
+    for filename, label in _NAV:
+        current = ' aria-current="page"' if filename == active else ''
+        links.append(f'<a href="{filename}"{current}>{label}</a>')
     return (
         '<header class="site-header"><div class="wrap">'
         f'<a class="site-title" href="index.html">{html.escape(archive_title())}</a>'
         '<nav class="site-nav">'
-        f'<a href="{base_url}">{html.escape(source_host())} &#8599;</a>'
+        + ''.join(links)
+        + f'<a class="source-link" href="{base_url}">{html.escape(source_host())}'
+        ' &#8599;</a>'
         '</nav>'
         '<button class="theme-toggle" type="button" title="Switch between '
         'light and dark" aria-label="Switch between light and dark">'
@@ -1311,7 +1415,7 @@ def render_header() -> str:
 
 
 def render_document(title: str, body: list[str], *, head: list[str] = [],
-                    body_class: str = '') -> str:
+                    body_class: str = '', active: str = '') -> str:
     """Wrap a page's body in the document shell shared by every page."""
     parts = [
         '<!DOCTYPE html>',
@@ -1325,7 +1429,7 @@ def render_document(title: str, body: list[str], *, head: list[str] = [],
         *head,
         '</head>',
         f'<body class="{body_class}">' if body_class else '<body>',
-        render_header(),
+        render_header(active),
         '<main><div class="wrap">',
         *body,
         '</div></main>',
@@ -1483,13 +1587,15 @@ def render_category_badge(category: MirrorCategory | None) -> str:
     """Discourse's category badge: the category's color, then its name."""
     if not category:
         return ''
-    return (f'<span class="badge-category category-{category.id}">'
-            f'{html.escape(category.full_name)}</span>')
+    return (f'<a class="badge-category category-{category.id}" '
+            f'href="{html.escape(category.filename)}">'
+            f'{html.escape(category.full_name)}</a>')
 
 
 def render_tags(tags: list[MirrorTag]) -> str:
-    return ''.join(f'<span class="discourse-tag">{html.escape(t.name)}</span>'
-                   for t in tags)
+    return ''.join(
+        f'<a class="discourse-tag" href="{html.escape(t.filename)}">'
+        f'{html.escape(t.name)}</a>' for t in tags)
 
 
 def render_topic_list(topics: list[MirrorTopic], base_url: str) -> list[str]:
@@ -1551,7 +1657,146 @@ def render_index(topics: list[MirrorTopic], base_url: str) -> str:
         f'{html.escape(source_host())}</a></p>',
         *render_topic_list(topics, base_url),
     ]
-    return render_document(archive_title(), body, head=head)
+    return render_document(archive_title(), body, head=head,
+                           active='index.html')
+
+
+def render_listing(title: str, topics: list[MirrorTopic], base_url: str, *,
+                   subtitle: str = '', breadcrumb: str = '',
+                   active: str = '') -> str:
+    """A page whose body is a heading over a topic list."""
+    body = [
+        *( [f'<p class="breadcrumb">{breadcrumb}</p>'] if breadcrumb else []),
+        f'<h1 class="page-title">{html.escape(title)}</h1>',
+        *([f'<p class="page-subtitle">{subtitle}</p>'] if subtitle else []),
+        *render_topic_list(topics, base_url),
+    ]
+    return render_document(f'{title} - {archive_title()}', body, active=active)
+
+
+def topics_in_category(topics: list[MirrorTopic],
+                       category: MirrorCategory) -> list[MirrorTopic]:
+    """The topics of a category, a parent category's including its children's."""
+    return [t for t in topics if t.category and (
+        t.category.id == category.id or t.category.parent_id == category.id)]
+
+
+def render_category_page(category: MirrorCategory, topics: list[MirrorTopic],
+                         base_url: str) -> str:
+    n = len(topics)
+    subtitle = html.escape(category.description)
+    count = f'{n} {"topic" if n == 1 else "topics"} archived'
+    subtitle = f'{subtitle}<br>{count}' if subtitle else count
+    return render_listing(
+        category.full_name, topics, base_url,
+        subtitle=subtitle,
+        breadcrumb='<a href="categories.html">&larr; all categories</a>',
+        active='categories.html')
+
+
+def render_categories_page(categories: list[tuple[MirrorCategory, int]],
+                           base_url: str) -> str:
+    """Discourse's category list: a card per category, subcategories under it."""
+    children: dict[int, list[tuple[MirrorCategory, int]]] = {}
+    for category, count in categories:
+        if category.parent_id is not None:
+            children.setdefault(category.parent_id, []).append((category, count))
+
+    body = [
+        '<h1 class="page-title">Categories</h1>',
+        '<div class="category-list">',
+    ]
+    for category, count in categories:
+        if category.parent_id is not None:
+            continue
+        body.append(f'<div class="category-card category-{category.id}">')
+        body.append(
+            f'<h2><a href="{html.escape(category.filename)}">'
+            f'{html.escape(category.name)}</a></h2>')
+        if category.description:
+            body.append(
+                f'<p class="category-description">'
+                f'{html.escape(category.description)}</p>')
+        body.append(
+            f'<p class="category-count">{count} '
+            f'{"topic" if count == 1 else "topics"}</p>')
+        subcategories = children.get(category.id) or []
+        if subcategories:
+            body.append('<div class="subcategories">')
+            for child, child_count in subcategories:
+                body.append(
+                    f'<a class="badge-category category-{child.id}" '
+                    f'href="{html.escape(child.filename)}">'
+                    f'{html.escape(child.name)} ({child_count})</a>')
+            body.append('</div>')
+        body.append('</div>')
+    body.append('</div>')
+
+    return render_document(f'Categories - {archive_title()}', body,
+                           active='categories.html')
+
+
+def render_tag_page(tag: MirrorTag, topics: list[MirrorTopic],
+                    base_url: str) -> str:
+    n = len(topics)
+    return render_listing(
+        f'Topics tagged {tag.name}', topics, base_url,
+        subtitle=f'{n} {"topic" if n == 1 else "topics"} archived',
+        breadcrumb='<a href="tags.html">&larr; all tags</a>',
+        active='tags.html')
+
+
+def render_tags_page(tags: list[tuple[MirrorTag, int]]) -> str:
+    """Every tag in the archive, most used first."""
+    body = [
+        '<h1 class="page-title">Tags</h1>',
+        f'<p class="page-subtitle">{len(tags)} tags in use</p>',
+        '<div class="tag-list">',
+    ]
+    for tag, count in tags:
+        body.append(
+            f'<a class="discourse-tag" href="{html.escape(tag.filename)}">'
+            f'{html.escape(tag.name)}<span class="tag-count">{count}</span></a>')
+    body += ['</div>']
+    return render_document(f'Tags - {archive_title()}', body,
+                           active='tags.html')
+
+
+def write_browse_pages(topics: list[MirrorTopic],
+                       categories: dict[int, MirrorCategory],
+                       output_dir: Path, base_url: str) -> None:
+    """Write the category and tag pages, and the two index pages over them.
+
+    Only categories and tags that topics in the archive actually use get a
+    page, so an archive without topic metadata gets two empty index pages
+    rather than links that lead nowhere.
+    """
+    used = [(c, len(topics_in_category(topics, c)))
+            for c in sorted(categories.values(),
+                            key=lambda c: (c.parent.name if c.parent else c.name,
+                                           c.parent_id is not None, c.name))]
+    used = [(c, n) for c, n in used if n]
+    for category, _ in used:
+        path = output_dir / category.filename
+        log.info("rendering category %s to %s", category.full_name, path)
+        path.write_text(render_category_page(
+            category, topics_in_category(topics, category), base_url))
+    (output_dir / 'categories.html').write_text(
+        render_categories_page(used, base_url))
+
+    by_tag: dict[str, tuple[MirrorTag, list[MirrorTopic]]] = {}
+    for topic in topics:
+        for tag in topic.tags:
+            by_tag.setdefault(tag.slug, (tag, []))[1].append(topic)
+    for tag, tagged in by_tag.values():
+        path = output_dir / tag.filename
+        log.info("rendering tag %s to %s", tag.name, path)
+        path.write_text(render_tag_page(tag, tagged, base_url))
+    (output_dir / 'tags.html').write_text(render_tags_page(
+        sorted(((t, len(ts)) for t, ts in by_tag.values()),
+               key=lambda e: (-e[1], e[0].name))))
+
+    log.info("wrote %d category and %d tag pages", len(used), len(by_tag))
 
 
 def load_topics(posts_dir: Path) -> list[MirrorTopic]:
@@ -1643,6 +1888,8 @@ def main() -> None:
     index_path = output_dir / 'index.html'
     log.info("writing index with %d topics to %s", len(topics), index_path)
     index_path.write_text(render_index(topics, base_url))
+
+    write_browse_pages(topics, categories, output_dir, base_url)
 
 
 if __name__ == "__main__":
