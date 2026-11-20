@@ -150,7 +150,8 @@ It scans every archived post, downloads whatever is missing from
 deleted on the source site (HTTP 404) are logged and skipped.
 
 Avatars, emoji images and images hosted on other sites are not archived; the
-mirror keeps linking to them where they live.
+mirror keeps linking to them where they live. An avatar that doesn't load is
+drawn as a letter avatar instead, see [Avatars](#avatars) below.
 
 ## Rendering an HTML mirror
 
@@ -279,6 +280,36 @@ The category badge and the tags under a topic's title link to these pages.
 Only categories and tags that archived topics actually use get a page, so
 there are no links that lead nowhere; for an archive with no topic metadata
 both lists are simply empty.
+
+### Avatars
+
+Avatars aren't archived -- they are the source site's own images, and the
+mirror goes on linking to them there. That leaves one loose end: a reader who
+is offline, a source site that has gone away, or simply a user who has changed
+their picture since the post was archived, would get a page of broken-image
+icons where the faces should be.
+
+So an avatar that fails to load is replaced by a letter avatar -- the same
+idea Discourse uses for users who never set a picture: the person's initial
+on a colour derived from their name, so everyone gets their own and the same
+person gets the same one on every page of the mirror. The name's hash picks a
+hue and one of three lightnesses, which is enough for the few hundred people
+in an archive to come out nearly all distinct (359 names, 353 different
+avatars, in the delvingbitcoin archive).
+
+It is drawn as an SVG data URI, so there is no image to fetch and nothing
+extra written into the output, and one listener on the document does it for
+every avatar on the page rather than an `onerror` on each of the thousands a
+mirror has.
+
+The name comes from whichever the page has: an explicit `data-avatar-name`
+where the alt text is deliberately empty, the alt text otherwise, and for the
+avatars inside a quoted post, the `data-username` Discourse puts on the
+quote -- so those are covered too. Emoji images have no equivalent fallback: a
+missing one is a missing inline image, not a hole where a face should be.
+
+It needs JavaScript, like the theme toggle does. Without it a missing avatar
+is just a missing image.
 
 ### Styling
 
