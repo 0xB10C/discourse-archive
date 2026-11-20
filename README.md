@@ -207,6 +207,7 @@ The generated structure looks like:
 ```
 site
 ├── index.html
+├── top.html
 ├── categories.html
 ├── tags.html
 ├── style.css
@@ -260,8 +261,12 @@ avatar of everyone who posted with their post count.
 
 ### Browsing by category and tag
 
-The header links to a category list and a tag list, both built from the
-archived topic metadata:
+The header carries the four lists Discourse's own does -- Latest, Top,
+Categories, Tags. `index.html` is Latest, the topics most recently posted in;
+`top.html` is the same list ordered by view count, which is the archive's
+answer to "what got read here".
+
+The category list and the tag list are built from the archived topic metadata:
 
 - `categories.html` -- a card per category with its description and how many
   of its topics are archived, subcategories listed under their parent
