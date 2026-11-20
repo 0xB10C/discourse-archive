@@ -1511,7 +1511,8 @@ _TOGGLE_SCRIPT = (
 # The pages the header links to, as (filename, label). Whichever of them is
 # being rendered is marked as the current page.
 _NAV = (
-    ('index.html', 'Topics'),
+    ('index.html', 'Latest'),
+    ('top.html', 'Top'),
     ('categories.html', 'Categories'),
     ('tags.html', 'Tags'),
 )
@@ -1988,6 +1989,25 @@ def render_tags_page(tags: list[tuple[MirrorTag, int]]) -> str:
                            active='tags.html')
 
 
+def render_top(topics: list[MirrorTopic], base_url: str) -> str:
+    """Discourse's "Top": the busiest topics rather than the most recent ones.
+
+    By view count, which is the measure Discourse leads with, falling back to
+    replies for an archive whose topic metadata (and so view counts) is
+    missing.
+    """
+    by_views = any(t.views is not None for t in topics)
+    ordered = sorted(
+        topics,
+        key=lambda t: (t.views or 0, t.reply_count, t.last_activity),
+        reverse=True)
+    measure = 'viewed' if by_views else 'replied to'
+    return render_listing(
+        'Top topics', ordered, base_url,
+        subtitle=f'The most {measure} topics in the archive',
+        active='top.html')
+
+
 def write_browse_pages(topics: list[MirrorTopic],
                        categories: dict[int, MirrorCategory],
                        output_dir: Path, base_url: str) -> None:
@@ -2114,6 +2134,10 @@ def main() -> None:
     index_path = output_dir / 'index.html'
     log.info("writing index with %d topics to %s", len(topics), index_path)
     index_path.write_text(render_index(topics, base_url))
+
+    top_path = output_dir / 'top.html'
+    log.info("writing top topics to %s", top_path)
+    top_path.write_text(render_top(topics, base_url))
 
     write_browse_pages(topics, categories, output_dir, base_url)
 
