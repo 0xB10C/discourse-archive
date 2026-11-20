@@ -476,6 +476,15 @@ a.badge-category:hover {
   font-size: 0.9em;
 }
 
+.topic-list td.num a {
+  color: var(--primary-medium);
+}
+
+.topic-list td.num a:hover {
+  color: var(--tertiary);
+  text-decoration: none;
+}
+
 .topic-list .posters {
   width: 9.5rem;
   white-space: nowrap;
@@ -1822,6 +1831,9 @@ def render_topic_list(topics: list[MirrorTopic], base_url: str) -> list[str]:
 
     for topic in topics:
         badges = render_category_badge(topic.category) + render_tags(topic.tags)
+        # Discourse's activity column takes you to the newest post, which here
+        # is the newest one archived.
+        last = topic.posts[-1]
         activity = topic.last_activity
         views = topic.views
         parts += [
@@ -1836,9 +1848,10 @@ def render_topic_list(topics: list[MirrorTopic], base_url: str) -> list[str]:
             '<td class="num" data-label="views">'
             f'{format_count(views) if views is not None else "&mdash;"}</td>',
             '<td class="num" data-label="activity">'
-            f'<time datetime="{html.escape(activity.isoformat())}" '
+            f'<a href="{html.escape(topic.filename)}#post-{last.post_number}" '
             f'title="{html.escape(format_datetime(activity))}">'
-            f'{html.escape(format_relative(activity))}</time></td>',
+            f'<time datetime="{html.escape(activity.isoformat())}">'
+            f'{html.escape(format_relative(activity))}</time></a></td>',
             '</tr>',
         ]
 
