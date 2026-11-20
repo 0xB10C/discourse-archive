@@ -4,9 +4,14 @@ This script renders a static HTML mirror from a Discourse archive created by
 `archive.py`.
 
 It reads the per-post JSON files under `<target-dir>/posts`, groups them into
-topics, and writes one minimal HTML page per topic (all posts in order, using
-the server-rendered `cooked` HTML) plus a flat `index.html` listing topics with
-the most recently active first.
+topics, and writes one HTML page per topic (all posts in order, using the
+server-rendered `cooked` HTML). Over those sit the lists Discourse itself
+offers: the topics by latest activity (`index.html`) and by views
+(`top.html`), and a page per category and per tag, built from the topic
+metadata under `<target-dir>/topics`.
+
+The result is a static site with no dependencies: the pages, one stylesheet,
+and the uploads copied out of the archive.
 """
 import argparse
 import re
@@ -1946,8 +1951,7 @@ def render_category_page(category: MirrorCategory, topics: list[MirrorTopic],
         active='categories.html')
 
 
-def render_categories_page(categories: list[tuple[MirrorCategory, int]],
-                           base_url: str) -> str:
+def render_categories_page(categories: list[tuple[MirrorCategory, int]]) -> str:
     """Discourse's category list: a card per category, subcategories under it."""
     children: dict[int, list[tuple[MirrorCategory, int]]] = {}
     for category, count in categories:
@@ -2052,8 +2056,7 @@ def write_browse_pages(topics: list[MirrorTopic],
         log.info("rendering category %s to %s", category.full_name, path)
         path.write_text(render_category_page(
             category, topics_in_category(topics, category), base_url))
-    (output_dir / 'categories.html').write_text(
-        render_categories_page(used, base_url))
+    (output_dir / 'categories.html').write_text(render_categories_page(used))
 
     by_tag: dict[str, tuple[MirrorTag, list[MirrorTopic]]] = {}
     for topic in topics:
