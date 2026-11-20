@@ -16,6 +16,7 @@ import html
 import shutil
 import functools
 import datetime
+import dataclasses
 from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlparse
@@ -334,6 +335,156 @@ footer.build {
   font-size: 0.85em;
   color: var(--primary-medium);
   text-align: center;
+}
+
+/* --- Topic list ----------------------------------------------------- */
+
+.topic-list {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.topic-list th {
+  padding: 0.5rem;
+  text-align: left;
+  font-weight: normal;
+  font-size: 0.9em;
+  color: var(--primary-medium);
+  border-bottom: 2px solid var(--primary-low);
+}
+
+.topic-list td {
+  padding: 0.7rem 0.5rem;
+  border-bottom: 1px solid var(--primary-low);
+  vertical-align: middle;
+}
+
+.topic-list tbody tr:hover td {
+  background: var(--primary-very-low);
+}
+
+.topic-list .title {
+  font-size: 1.05em;
+  font-weight: 500;
+  color: var(--primary);
+}
+
+.topic-list .title:hover {
+  color: var(--tertiary);
+  text-decoration: none;
+}
+
+.topic-list .title:visited {
+  color: var(--primary-medium);
+}
+
+.topic-badges {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+  margin-top: 0.3rem;
+}
+
+.topic-list th.num,
+.topic-list td.num {
+  width: 4.5rem;
+  text-align: right;
+  white-space: nowrap;
+  color: var(--primary-medium);
+  font-size: 0.9em;
+}
+
+.topic-list .posters {
+  width: 9.5rem;
+  white-space: nowrap;
+}
+
+img.poster {
+  width: 25px;
+  height: 25px;
+  border-radius: 50%;
+  margin-right: 0.25rem;
+  vertical-align: middle;
+}
+
+/* The original poster and whoever posted last are the two faces worth
+ * telling apart, as Discourse does. */
+img.poster.op {
+  box-shadow: 0 0 0 2px var(--tertiary);
+}
+
+img.poster.latest {
+  box-shadow: 0 0 0 2px var(--primary-low-mid);
+}
+
+.badge-category {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.1rem 0.4rem;
+  border-radius: 0.2rem;
+  background: var(--primary-very-low);
+  color: var(--primary-medium);
+  font-size: 0.85em;
+}
+
+.badge-category::before {
+  content: "";
+  flex: none;
+  width: 0.65em;
+  height: 0.65em;
+  border-radius: 2px;
+  background: var(--category-color, var(--primary-low-mid));
+}
+
+.discourse-tag {
+  padding: 0.1rem 0.4rem;
+  border-radius: 0.2rem;
+  background: var(--primary-very-low);
+  color: var(--primary-medium);
+  font-size: 0.8em;
+}
+
+/* Narrow screens: the columns stack under the title, labelled by the
+ * `data-label` the renderer puts on each of them. */
+@media (max-width: 45rem) {
+  .topic-list thead {
+    display: none;
+  }
+
+  .topic-list,
+  .topic-list tbody,
+  .topic-list tr,
+  .topic-list td {
+    display: block;
+    width: auto;
+  }
+
+  .topic-list tr {
+    padding: 0.7rem 0;
+    border-bottom: 1px solid var(--primary-low);
+  }
+
+  .topic-list td {
+    padding: 0.15rem 0;
+    border: 0;
+  }
+
+  .topic-list td.num {
+    display: inline-block;
+    width: auto;
+    margin-right: 1rem;
+    text-align: left;
+  }
+
+  .topic-list td.num::before {
+    content: attr(data-label) " ";
+  }
+
+  .topic-list .posters {
+    margin-top: 0.3rem;
+  }
 }
 
 /* --- Topic page ----------------------------------------------------- */
@@ -749,10 +900,6 @@ pre.onebox ol.lines li::before {
 '''
 
 
-def write_stylesheet(output_dir: Path) -> None:
-    (output_dir / 'style.css').write_text(STYLESHEET)
-
-
 def render_build_footer() -> str:
     built = format_datetime(datetime.datetime.now(datetime.timezone.utc))
     return ('<footer class="build"><div class="wrap">'
@@ -840,6 +987,35 @@ def format_datetime(dt: datetime.datetime) -> str:
     return dt.strftime('%d %b %Y, %H:%M UTC')
 
 
+def format_relative(dt: datetime.datetime,
+                    now: datetime.datetime | None = None) -> str:
+    """Short "how long ago" label for a topic list, the way Discourse writes it.
+
+    Recent activity is counted in minutes, hours or days; anything older is
+    given as a date, with the year once it isn't this one ("12 Jan", "Mar '24").
+    """
+    now = now or datetime.datetime.now(datetime.timezone.utc)
+    seconds = (now - dt).total_seconds()
+    if seconds < 3600:
+        return f'{max(int(seconds // 60), 1)}m'
+    if seconds < 86400:
+        return f'{int(seconds // 3600)}h'
+    if seconds < 86400 * 30:
+        return f'{int(seconds // 86400)}d'
+    if dt.year == now.year:
+        return dt.strftime('%-d %b')
+    return dt.strftime("%b '%y")
+
+
+def format_count(n: int) -> str:
+    """Compact count for the topic list, e.g. 1489 -> "1.5k"."""
+    if n < 1000:
+        return str(n)
+    if n < 1000000:
+        return f'{n / 1000:.1f}k'.replace('.0k', 'k')
+    return f'{n / 1000000:.1f}M'.replace('.0M', 'M')
+
+
 _AVATAR_SIZE = 48
 
 
@@ -882,6 +1058,10 @@ class MirrorPost:
         return self.raw.get('name') or self.raw['username']
 
     @property
+    def username(self) -> str:
+        return self.raw['username']
+
+    @property
     def cooked(self) -> str:
         return self.raw.get('cooked') or ''
 
@@ -909,12 +1089,121 @@ class MirrorPost:
             self.raw.get('updated_at') or self.raw['created_at'])
 
 
+_SLUG_RE = re.compile(r'[^a-z0-9]+')
+
+
+def slugify(name: str) -> str:
+    """A filename-safe form of a tag name, e.g. "lang:rust" -> "lang-rust"."""
+    return _SLUG_RE.sub('-', name.lower()).strip('-') or 'tag'
+
+
+@dataclass(frozen=True)
+class MirrorTag:
+    name: str
+    slug: str
+
+    @classmethod
+    def parse(cls, tag: dict | str) -> 'MirrorTag':
+        """Read one entry of a topic's `tags`.
+
+        Discourse gives them either as plain names or, on newer versions, as
+        `{id, name, slug}` objects -- both show up in the same archive.
+        """
+        if isinstance(tag, dict):
+            name = tag.get('name') or tag.get('slug') or ''
+            return cls(name, tag.get('slug') or slugify(name))
+        return cls(tag, slugify(tag))
+
+
+@dataclass(frozen=True)
+class MirrorCategory:
+    """A category of the source site, from `<target-dir>/categories.json`."""
+    id: int
+    name: str
+    slug: str
+    color: str
+    description: str
+    parent_id: int | None
+    parent: 'MirrorCategory | None' = None
+
+    @property
+    def full_name(self) -> str:
+        """"Parent / Child" for a subcategory, just the name otherwise."""
+        if self.parent:
+            return f'{self.parent.name} / {self.name}'
+        return self.name
+
+
+def load_categories(path: Path) -> dict[int, MirrorCategory]:
+    """Read the archived category list, keyed by id.
+
+    Returns an empty mapping if the archive predates `--backfill-topics`; the
+    mirror then simply doesn't show categories.
+    """
+    if not path.is_file():
+        return {}
+    raw = json.loads(path.read_text()).get('categories') or []
+    categories = {
+        c['id']: MirrorCategory(
+            id=c['id'],
+            name=c.get('name') or '',
+            slug=c.get('slug') or str(c['id']),
+            color=c.get('color') or '',
+            description=c.get('description_text') or '',
+            parent_id=c.get('parent_category_id'),
+        )
+        for c in raw
+    }
+    # Link subcategories to their parent now that they're all loaded.
+    return {
+        i: dataclasses.replace(c, parent=categories.get(c.parent_id))
+        for i, c in categories.items()
+    }
+
+
+def load_topic_metadata(topics_dir: Path) -> dict[int, dict]:
+    """Read the archived topic metadata (see archive.py), keyed by topic id."""
+    if not topics_dir.is_dir():
+        return {}
+    metadata = {}
+    for path in topics_dir.glob('**/*.json'):
+        raw = json.loads(path.read_text())
+        if 'id' in raw:
+            metadata[raw['id']] = raw
+    return metadata
+
+
+def category_colors(categories: dict[int, MirrorCategory]) -> str:
+    """A `--category-color` rule per category, appended to the stylesheet.
+
+    Discourse gives every category a color; keeping them out of the HTML means
+    the badges stay plain markup and the colors stay in one place.
+    """
+    rules = [f'.category-{c.id} {{ --category-color: #{c.color}; }}'
+             for c in sorted(categories.values(), key=lambda c: c.id)
+             if re.fullmatch(r'[0-9A-Fa-f]{3,8}', c.color or '')]
+    if not rules:
+        return ''
+    return '\n/* --- Category colors (from the source site) ---------- */\n\n' \
+        + '\n'.join(rules) + '\n'
+
+
+def write_stylesheet(output_dir: Path,
+                     categories: dict[int, MirrorCategory]) -> None:
+    (output_dir / 'style.css').write_text(
+        STYLESHEET + category_colors(categories))
+
+
 @dataclass
 class MirrorTopic:
     id: int
     slug: str
     title: str
     posts: list[MirrorPost] = field(default_factory=list)
+    # The archived topic metadata, empty for an archive that has none. It is
+    # the only source for what isn't on the posts: category, tags, views.
+    meta: dict = field(default_factory=dict)
+    category: MirrorCategory | None = None
 
     @property
     def last_activity(self) -> datetime.datetime:
@@ -933,6 +1222,23 @@ class MirrorTopic:
     def filename(self) -> str:
         date = str(self.first_created.date())
         return f"{date}-{self.slug}-id{self.id}.html"
+
+    @property
+    def tags(self) -> list[MirrorTag]:
+        return [MirrorTag.parse(t) for t in (self.meta.get('tags') or [])]
+
+    @property
+    def views(self) -> int | None:
+        return self.meta.get('views')
+
+    @property
+    def reply_count(self) -> int:
+        """Replies the way Discourse counts them: every post but the first.
+
+        Taken from the topic's own post count where known, so a topic whose
+        posts aren't all archived still reports what the source site says.
+        """
+        return max((self.meta.get('posts_count') or len(self.posts)) - 1, 0)
 
 
 def render_missing_posts(previous_post_number: int, next_post_number: int) -> str:
@@ -1120,7 +1426,113 @@ def render_topic(topic: MirrorTopic, base_url: str, uploads: dict[str, str],
     return render_document(topic.title, body, head=head, body_class='topic')
 
 
-def render_index(topics: list[MirrorTopic]) -> str:
+# Discourse shows at most five faces per topic in its topic list.
+_MAX_POSTERS = 5
+
+
+def topic_posters(topic: MirrorTopic) -> list[tuple[MirrorPost, str]]:
+    """The authors to show for a topic, as (one of their posts, role).
+
+    Like Discourse: the original poster first, whoever posted last at the end,
+    and the most prolific posters in between, five at most. The roles are what
+    the stylesheet uses to mark the first and the latest poster.
+    """
+    posts_by_author: dict[str, list[MirrorPost]] = {}
+    for post in topic.posts:
+        posts_by_author.setdefault(post.username, []).append(post)
+
+    first = topic.posts[0].username
+    last = topic.posts[-1].username
+    middle = sorted(
+        (u for u in posts_by_author if u not in (first, last)),
+        key=lambda u: (-len(posts_by_author[u]), u))
+
+    usernames = [first] + middle
+    if last != first:
+        usernames.append(last)
+    if len(usernames) > _MAX_POSTERS:
+        # Drop from the middle: the first and the latest poster are the two
+        # worth keeping.
+        usernames = usernames[:_MAX_POSTERS - 1] + usernames[-1:]
+
+    roles = {first: 'op', last: 'latest'}
+    return [(posts_by_author[u][-1], roles.get(u, '')) for u in usernames]
+
+
+def render_posters(topic: MirrorTopic, base_url: str) -> str:
+    """The column of author avatars shown for a topic in the topic list."""
+    faces = []
+    for post, role in topic_posters(topic):
+        avatar = avatar_url(post.avatar_template, base_url)
+        if not avatar:
+            continue
+        title = html.escape(post.author)
+        if role == 'op':
+            title += ' (original poster)'
+        elif role == 'latest':
+            title += ' (posted last)'
+        faces.append(
+            f'<img class="poster{" " + role if role else ""}" '
+            f'src="{html.escape(avatar)}" '
+            f'alt="{html.escape(post.author)}" title="{title}" '
+            'width="25" height="25" loading="lazy">')
+    return ''.join(faces)
+
+
+def render_category_badge(category: MirrorCategory | None) -> str:
+    """Discourse's category badge: the category's color, then its name."""
+    if not category:
+        return ''
+    return (f'<span class="badge-category category-{category.id}">'
+            f'{html.escape(category.full_name)}</span>')
+
+
+def render_tags(tags: list[MirrorTag]) -> str:
+    return ''.join(f'<span class="discourse-tag">{html.escape(t.name)}</span>'
+                   for t in tags)
+
+
+def render_topic_list(topics: list[MirrorTopic], base_url: str) -> list[str]:
+    """Discourse's topic list: title, who took part, replies, views, activity."""
+    parts = [
+        '<table class="topic-list">',
+        '<thead><tr>',
+        '<th class="topic-list-title">Topic</th>',
+        '<th class="posters">Users</th>',
+        '<th class="num">Replies</th>',
+        '<th class="num">Views</th>',
+        '<th class="num">Activity</th>',
+        '</tr></thead>',
+        '<tbody>',
+    ]
+
+    for topic in topics:
+        badges = render_category_badge(topic.category) + render_tags(topic.tags)
+        activity = topic.last_activity
+        views = topic.views
+        parts += [
+            '<tr>',
+            '<td class="topic-list-title">'
+            f'<a class="title" href="{html.escape(topic.filename)}">'
+            f'{html.escape(topic.title)}</a>'
+            + (f'<div class="topic-badges">{badges}</div>' if badges else '')
+            + '</td>',
+            f'<td class="posters">{render_posters(topic, base_url)}</td>',
+            f'<td class="num" data-label="replies">{topic.reply_count}</td>',
+            '<td class="num" data-label="views">'
+            f'{format_count(views) if views is not None else "&mdash;"}</td>',
+            '<td class="num" data-label="activity">'
+            f'<time datetime="{html.escape(activity.isoformat())}" '
+            f'title="{html.escape(format_datetime(activity))}">'
+            f'{html.escape(format_relative(activity))}</time></td>',
+            '</tr>',
+        ]
+
+    parts += ['</tbody>', '</table>']
+    return parts
+
+
+def render_index(topics: list[MirrorTopic], base_url: str) -> str:
     """Render the index page listing topics, most recently active first."""
     og_url = site_url_for('index.html')
     head = [
@@ -1137,19 +1549,8 @@ def render_index(topics: list[MirrorTopic]) -> str:
         f'<p class="page-subtitle">{len(topics)} topics, {n_posts} posts '
         f'archived from <a href="{html.escape(args().url.rstrip("/"))}">'
         f'{html.escape(source_host())}</a></p>',
-        '<ul>',
+        *render_topic_list(topics, base_url),
     ]
-
-    for topic in topics:
-        n = len(topic.posts)
-        plural = 'post' if n == 1 else 'posts'
-        body.append(
-            f'<li><a href="{html.escape(topic.filename)}">'
-            f'{html.escape(topic.title)}</a> '
-            f'&mdash; {html.escape(topic.author)}, '
-            f'{topic.last_activity.date()} ({n} {plural})</li>')
-
-    body.append('</ul>')
     return render_document(archive_title(), body, head=head)
 
 
@@ -1189,16 +1590,31 @@ def main() -> None:
 
     base_url = args().url.rstrip('/')
 
+    categories = load_categories(target_dir / 'categories.json')
+    metadata = load_topic_metadata(target_dir / 'topics')
+    if metadata:
+        log.info("found metadata for %d topics and %d categories",
+                 len(metadata), len(categories))
+    else:
+        log.warning("no topic metadata found under %s; the mirror won't show "
+                    "categories, tags or view counts (run "
+                    "`discourse-archive --backfill-topics`)",
+                    target_dir / 'topics')
+
     topics = load_topics(posts_dir)
     if not topics:
         log.warning("no posts found under %s", posts_dir)
         return
 
+    for topic in topics:
+        topic.meta = metadata.get(topic.id, {})
+        topic.category = categories.get(topic.meta.get('category_id'))
+
     # Most recently active topic first.
     topics.sort(key=lambda t: t.last_activity, reverse=True)
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    write_stylesheet(output_dir)
+    write_stylesheet(output_dir, categories)
 
     uploads_dir = target_dir / 'uploads'
     uploads = load_uploads(uploads_dir)
@@ -1226,7 +1642,7 @@ def main() -> None:
 
     index_path = output_dir / 'index.html'
     log.info("writing index with %d topics to %s", len(topics), index_path)
-    index_path.write_text(render_index(topics))
+    index_path.write_text(render_index(topics, base_url))
 
 
 if __name__ == "__main__":

@@ -158,9 +158,9 @@ Once you have an archive, `mirror.py` renders it into a static HTML site you can
 serve anywhere. It reads the per-post JSON under `<target-dir>/posts`, groups the
 posts into topics, and writes one HTML page per topic (using Discourse's
 server-rendered `cooked` HTML) plus a flat `index.html` listing topics with the
-most recently active first. There is no external dependency: a page is its
-HTML plus the mirror's own `style.css`, and the only script on it is the few
-lines behind the light/dark toggle.
+most recently active first, the way Discourse lists them. There is no
+external dependency: a page is its HTML plus the mirror's own `style.css`, and
+the only script on it is the few lines behind the light/dark toggle.
 
 ```sh
 % ./mirror.py --help
@@ -218,6 +218,25 @@ site
 
 Re-running is idempotent - it overwrites the output directory in place, so you
 can regenerate the mirror after each sync.
+
+### The topic list
+
+`index.html` lists topics the way Discourse's own topic list does: the title,
+the category and tags under it, the faces of up to five people who posted (the
+original poster first and whoever posted last at the end, both marked, with
+the most prolific posters in between), the reply count, the view count, and
+how long ago the topic was last active.
+
+The category, the tags and the view count come from the archived topic
+metadata, so they are only there for an archive that has it -- see
+[Topic metadata](#topic-metadata) above and `discourse-archive
+--backfill-topics`. Everything else is derived from the archived posts, so a
+mirror of an older archive simply lists topics without them.
+
+Reply and view counts are what the source site reported for the topic when it
+was last synced, so a topic whose posts aren't all archived still shows how
+many replies it really has. The avatars, like emoji, are not archived: they
+are loaded from the source site.
 
 ### Styling
 
