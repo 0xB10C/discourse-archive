@@ -585,6 +585,81 @@ img.poster.latest {
   font-size: 0.9em;
 }
 
+/* Discourse's "topic map": the topic's dates and counts and everyone who
+ * posted in it, shown under the first post. */
+.topic-map {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 1rem;
+  margin: 0 0 0.5rem;
+  padding: 0.8rem 1rem;
+  border: 1px solid var(--primary-low);
+  border-radius: 0.3rem;
+  background: var(--primary-very-low);
+}
+
+.topic-map-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1.5rem;
+}
+
+.topic-map .stat {
+  display: flex;
+  flex-direction: column;
+  font-size: 0.8em;
+  color: var(--primary-medium);
+}
+
+.topic-map .stat .value {
+  font-size: 1.3em;
+  font-weight: 600;
+  color: var(--primary);
+}
+
+.topic-map-users {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-left: auto;
+}
+
+.participant {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  color: var(--primary-medium);
+  font-size: 0.85em;
+}
+
+.participant:hover {
+  text-decoration: none;
+  color: var(--primary);
+}
+
+.participant img {
+  width: 25px;
+  height: 25px;
+  border-radius: 50%;
+}
+
+/* The topic map sits where a reply to the first post would, so it is indented
+ * to line up with the posts' bodies rather than their avatars. */
+.topic .topic-map {
+  margin-left: calc(45px + 0.85rem);
+}
+
+@media (max-width: 40rem) {
+  .topic .topic-map {
+    margin-left: 0;
+  }
+
+  .topic-map-users {
+    margin-left: 0;
+  }
+}
+
 .post {
   display: grid;
   grid-template-columns: 45px minmax(0, 1fr);
@@ -1483,6 +1558,61 @@ def render_post(post: MirrorPost, base_url: str, uploads: dict[str, str],
     return parts
 
 
+def render_participants(topic: MirrorTopic, base_url: str) -> str:
+    """Everyone who posted in the topic, most posts first, with their count."""
+    posts_by_author: dict[str, list[MirrorPost]] = {}
+    for post in topic.posts:
+        posts_by_author.setdefault(post.username, []).append(post)
+
+    chips = []
+    for username, posts in sorted(posts_by_author.items(),
+                                  key=lambda e: (-len(e[1]), e[0])):
+        post = posts[-1]
+        avatar = avatar_url(post.avatar_template, base_url)
+        n = len(posts)
+        label = f'{post.author}: {n} {"post" if n == 1 else "posts"}'
+        face = (f'<img src="{html.escape(avatar)}" alt="" width="25" '
+                'height="25" loading="lazy">' if avatar else '')
+        chips.append(
+            f'<a class="participant" href="{base_url}/u/{html.escape(username)}" '
+            f'title="{html.escape(label)}">{face}'
+            f'<span class="participant-count">{n}</span></a>')
+    return ''.join(chips)
+
+
+def render_topic_map(topic: MirrorTopic, base_url: str) -> list[str]:
+    """Discourse's topic map: the topic's dates and counts, and who posted.
+
+    Discourse puts it right below the first post, which is where the mirror
+    puts it too.
+    """
+    def stat(value: str, label: str, title: str = '') -> str:
+        attr = f' title="{html.escape(title)}"' if title else ''
+        return (f'<div class="stat"{attr}><span class="value">{value}</span>'
+                f'<span class="label">{label}</span></div>')
+
+    created = topic.first_created
+    last = topic.last_activity
+    stats = [
+        stat(html.escape(format_relative(created)), 'created',
+             format_datetime(created)),
+        stat(html.escape(format_relative(last)), 'last reply',
+             format_datetime(last)),
+        stat(str(topic.reply_count), 'replies'),
+    ]
+    if topic.views is not None:
+        stats.append(stat(format_count(topic.views), 'views'))
+    users = len({p.username for p in topic.posts})
+    stats.append(stat(str(users), 'users'))
+
+    return [
+        '<section class="topic-map">',
+        '<div class="topic-map-stats">' + ''.join(stats) + '</div>',
+        f'<div class="topic-map-users">{render_participants(topic, base_url)}</div>',
+        '</section>',
+    ]
+
+
 def render_topic(topic: MirrorTopic, base_url: str, uploads: dict[str, str],
                  missing_uploads: set[str]) -> str:
     """Render a single topic (with all its posts) to an HTML document.
@@ -1505,15 +1635,14 @@ def render_topic(topic: MirrorTopic, base_url: str, uploads: dict[str, str],
         f'<meta property="og:url" content="{og_url}">',
     ]
 
-    n = len(topic.posts)
+    badges = render_category_badge(topic.category) + render_tags(topic.tags)
     body = [
         '<p class="breadcrumb"><a href="index.html">&larr; all topics</a></p>',
         '<header class="topic-header">',
         f'<h1 class="page-title">{title}</h1>',
+        *([f'<div class="topic-badges">{badges}</div>'] if badges else []),
         '<p class="topic-meta">'
-        f'{n} {"post" if n == 1 else "posts"} &middot; '
-        f'started {html.escape(format_datetime(topic.first_created))} &middot; '
-        f'<a href="{canonical}">view the original topic &#8599;</a>'
+        f'Archived from <a href="{canonical}">the original topic &#8599;</a>'
         '</p>',
         '</header>',
     ]
@@ -1526,6 +1655,8 @@ def render_topic(topic: MirrorTopic, base_url: str, uploads: dict[str, str],
                 body.append(gap)
         previous_post_number = post.post_number
         body += render_post(post, base_url, uploads, missing_uploads)
+        if post is topic.posts[0]:
+            body += render_topic_map(topic, base_url)
 
     return render_document(topic.title, body, head=head, body_class='topic')
 

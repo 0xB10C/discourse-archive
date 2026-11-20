@@ -242,6 +242,16 @@ was last synced, so a topic whose posts aren't all archived still shows how
 many replies it really has. The avatars, like emoji, are not archived: they
 are loaded from the source site.
 
+### Topic pages
+
+A topic page is its title, the category and tags it is filed under, and its
+posts in order, each with its author's avatar, the post number (linking to the
+post on the source site), when it was written, and what it replies to.
+
+Under the first post is Discourse's "topic map": when the topic was created
+and last replied to, how many replies, views and people it has, and the
+avatar of everyone who posted with their post count.
+
 ### Browsing by category and tag
 
 The header links to a category list and a tag list, both built from the
