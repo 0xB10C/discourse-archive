@@ -156,9 +156,10 @@ mirror keeps linking to them where they live.
 
 Once you have an archive, `mirror.py` renders it into a static HTML site you can
 serve anywhere. It reads the per-post JSON under `<target-dir>/posts`, groups the
-posts into topics, and writes one minimal, self-contained HTML page per topic
-(using Discourse's server-rendered `cooked` HTML) plus a flat `index.html`
-listing topics with the most recently active first.
+posts into topics, and writes one HTML page per topic (using Discourse's
+server-rendered `cooked` HTML) plus a flat `index.html` listing topics with the
+most recently active first. There is no JavaScript and no external dependency:
+a page is its HTML plus the mirror's own `style.css`.
 
 ```sh
 % ./mirror.py --help
@@ -205,6 +206,7 @@ The generated structure looks like:
 ```
 site
 ├── index.html
+├── style.css
 ├── 2025-10-13-about-the-meta-category-id1.html
 ├── 2025-10-14-about-the-research-category-id25.html
 ├── 2026-06-18-outbound-connection-success-rates-of-a-bitcoin-node-id142.html
@@ -215,6 +217,18 @@ site
 
 Re-running is idempotent - it overwrites the output directory in place, so you
 can regenerate the mirror after each sync.
+
+### Styling
+
+The mirror's look follows Discourse's default theme: the same color roles, a
+similar post layout (an avatar gutter next to the author line and body), and
+styling for the markup that Discourse's post HTML brings with it -- quoted
+posts, oneboxes (rich link previews), @mentions, lightboxed images, tables,
+footnotes.
+
+It is all one stylesheet, `style.css`, written into the output directory next
+to the pages and regenerated on every run. To restyle the mirror, edit
+`STYLESHEET` in `mirror.py`.
 
 ### Images
 
