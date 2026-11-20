@@ -342,10 +342,23 @@ deleted/moderated.
 created after `last_sync_date` in `<target-dir>/.metadata.json`. To force a
 full resync, delete that file before re-running.
 
-Each warning is preceded by an HTML comment `<!-- MIRROR-MISSING-POST -->`,
-so you can grep the rendered site for an overview of how many gaps exist.
+A gap between posts is only visible when there are posts on both sides of
+it, so posts missing from the *end* of a topic leave nothing to notice. Those
+are caught by comparing the archived posts against the post count the source
+site last reported for the topic (part of the topic metadata), and a topic
+that comes up short says so under its last post. The mirror also reports the
+total on each run:
+
+```
+WARNING:mirror:49 topics are missing 189 posts between them
+```
+
+Each warning is preceded by an HTML comment -- `<!-- MIRROR-MISSING-POST -->`
+for a gap between posts, `<!-- MIRROR-INCOMPLETE-TOPIC -->` for a topic with
+posts unaccounted for -- so you can grep the rendered site for an overview.
 
 ```sh
 % grep -rl MIRROR-MISSING-POST site/ | wc -l   # topics with at least one gap
 % grep -ro MIRROR-MISSING-POST site/*.html | wc -l  # total gaps across the mirror
+% grep -rl MIRROR-INCOMPLETE-TOPIC site/ | wc -l  # topics missing posts
 ```

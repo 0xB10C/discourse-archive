@@ -1663,6 +1663,27 @@ def render_topic_map(topic: MirrorTopic, base_url: str) -> list[str]:
     ]
 
 
+def render_incomplete_topic(topic: MirrorTopic) -> str:
+    """Note for a topic whose posts the archive doesn't have all of.
+
+    The gap warnings between posts only catch holes *between* archived posts;
+    posts missing from the end of a topic leave no hole to notice. Comparing
+    what the source site last reported the topic's post count to be against
+    what is archived catches both.
+    """
+    total = topic.meta.get('posts_count')
+    archived = len(topic.posts)
+    if not total or archived >= total:
+        return ''
+    missing = total - archived
+    return (
+        '<!-- MIRROR-INCOMPLETE-TOPIC -->\n'
+        f'<p class="missing-posts">&#9888; {archived} of this topic\'s {total} '
+        f'posts are archived. The other {missing if missing > 1 else "one"} '
+        f'{"were" if missing > 1 else "was"} either not fetched, or removed '
+        'from the source site after it was.</p>')
+
+
 def render_topic(topic: MirrorTopic, base_url: str, uploads: dict[str, str],
                  missing_uploads: set[str]) -> str:
     """Render a single topic (with all its posts) to an HTML document.
@@ -1707,6 +1728,10 @@ def render_topic(topic: MirrorTopic, base_url: str, uploads: dict[str, str],
         body += render_post(post, base_url, uploads, missing_uploads)
         if post is topic.posts[0]:
             body += render_topic_map(topic, base_url)
+
+    incomplete = render_incomplete_topic(topic)
+    if incomplete:
+        body.append(incomplete)
 
     return render_document(topic.title, body, head=head, body_class='topic')
 
@@ -2121,6 +2146,13 @@ def main() -> None:
         full_path = output_dir / topic.filename
         log.info("rendering topic %s (%s) to %s", topic.id, topic.slug, full_path)
         full_path.write_text(render_topic(topic, base_url, uploads, missing_uploads))
+
+    incomplete = [t for t in topics
+                  if (t.meta.get('posts_count') or 0) > len(t.posts)]
+    if incomplete:
+        log.warning("%d topics are missing %d posts between them; a full "
+                    "resync may fill them in (see README)", len(incomplete),
+                    sum(t.meta['posts_count'] - len(t.posts) for t in incomplete))
 
     if missing_uploads:
         log.warning("%d referenced uploads are not archived; those images point "
