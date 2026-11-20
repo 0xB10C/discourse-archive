@@ -51,6 +51,11 @@ parser.add_argument(
     '--backfill-uploads', action='store_true',
     help='Download any uploads referenced by already-archived posts that are '
     'missing from <target-dir>/uploads, then exit without syncing posts')
+parser.add_argument(
+    '--backfill-topics', action='store_true',
+    help='Download the topic metadata (category, tags, participants, view '
+    'count) of already-archived topics that is missing from '
+    '<target-dir>/topics, then exit without syncing posts')
 
 
 @functools.cache
@@ -298,6 +303,28 @@ class Topic:
         markdown = f"# {self.raw['title']}\n\n{self.markdown}"
         full_path.write_text(markdown)
 
+    def save_metadata(self, dir: Path):
+        """Write the topic's metadata (see `topic_metadata`) to disk."""
+        full_path = dir / self.folder_name / self.metadata_filename
+        full_path.parent.mkdir(parents=True, exist_ok=True)
+        # The slug follows the title, so a renamed topic would otherwise leave
+        # its metadata behind under the old name as well.
+        for stale in dir.glob(f'**/*-id{self.id}.json'):
+            if stale != full_path:
+                log.info("removing stale topic metadata %s", stale)
+                stale.unlink()
+        log.info("saving topic metadata %s to %s", self.id, full_path)
+        full_path.write_text(json.dumps(topic_metadata(self.raw), indent=2))
+
+    @property
+    def folder_name(self) -> str:
+        return self.get_created_at().strftime('%Y-%m-%B')
+
+    @property
+    def metadata_filename(self) -> str:
+        date = str(self.get_created_at().date())
+        return f"{date}-{self.slug}-id{self.id}.json"
+
     def get_topic(self) -> PostTopic:
         return PostTopic(
             id=self.raw['topic_id'],
@@ -315,6 +342,112 @@ class Topic:
         )
 
 
+# The fields of `/t/<id>.json` worth keeping: everything that describes the
+# topic itself. The bulk of the response -- the posts, the suggested topics,
+# the current user's state -- is either archived separately (posts) or
+# meaningless in an archive.
+_TOPIC_FIELDS = (
+    'id', 'title', 'fancy_title', 'slug', 'category_id', 'tags',
+    'tags_descriptions', 'created_at', 'last_posted_at', 'posts_count',
+    'reply_count', 'like_count', 'views', 'participant_count', 'word_count',
+    'archetype', 'visible', 'closed', 'archived', 'pinned_globally',
+    'pinned_at', 'pinned_until', 'has_accepted_answer', 'image_url',
+    'user_id', 'deleted_at',
+)
+
+# Of each user mentioned in `details` (the participants, the topic's author,
+# whoever posted last) we only keep what the mirror shows.
+_TOPIC_USER_FIELDS = ('id', 'username', 'name', 'avatar_template', 'post_count')
+
+
+def _topic_user(user: dict | None) -> dict | None:
+    if not user:
+        return None
+    return {k: user[k] for k in _TOPIC_USER_FIELDS if k in user}
+
+
+def topic_metadata(raw: dict) -> dict:
+    """Trim a `/t/<id>.json` response down to the topic's own metadata."""
+    meta = {k: raw[k] for k in _TOPIC_FIELDS if k in raw}
+    details = raw.get('details') or {}
+    meta['details'] = {
+        'created_by': _topic_user(details.get('created_by')),
+        'last_poster': _topic_user(details.get('last_poster')),
+        'participants': [
+            _topic_user(p) for p in (details.get('participants') or [])],
+    }
+    return meta
+
+
+def archived_topic_ids(topics_dir: Path) -> set[int]:
+    """The ids of the topics whose metadata is already archived."""
+    ids = set()
+    for path in topics_dir.glob('**/*-id*.json'):
+        try:
+            ids.add(int(path.stem.rsplit('-id', 1)[1]))
+        except (IndexError, ValueError):
+            log.warning("unexpected topic metadata filename %s", path)
+    return ids
+
+
+def fetch_topic(topic_id: int) -> dict | None:
+    """GET a topic's metadata, or None if it isn't retrievable."""
+    try:
+        return http_get_json(f"/t/{topic_id}.json")
+    except Exception:
+        log.warning("could not retrieve topic %d metadata", topic_id)
+        return None
+
+
+def save_categories(target_dir: Path) -> None:
+    """Archive the site's category list (names, colors, hierarchy).
+
+    Posts and topics only carry a `category_id`; this is what turns it into a
+    name and a color. Subcategories are flattened into the same list, each
+    keeping its `parent_category_id`.
+    """
+    try:
+        raw = http_get_json('/categories.json?include_subcategories=true')
+    except Exception:
+        log.warning("could not retrieve the category list")
+        return
+
+    flat = []
+
+    def add(categories):
+        for c in categories:
+            flat.append({k: v for k, v in c.items() if k != 'subcategory_list'})
+            add(c.get('subcategory_list') or [])
+
+    add((raw.get('category_list') or {}).get('categories') or [])
+    if not flat:
+        log.warning("the category list came back empty, not saving it")
+        return
+
+    path = target_dir / 'categories.json'
+    log.info("saving %d categories to %s", len(flat), path)
+    path.write_text(json.dumps({'categories': flat}, indent=2))
+
+
+def backfill_topics(posts_dir: Path, topics_dir: Path) -> None:
+    """Fetch the metadata of every archived topic we don't have yet."""
+    wanted = {json.loads(p.read_text())['topic_id']
+              for p in sorted(posts_dir.glob('**/*.json'))}
+    missing = sorted(wanted - archived_topic_ids(topics_dir))
+    log.info("%d topics archived, %d missing metadata", len(wanted), len(missing))
+
+    for n, topic_id in enumerate(missing, 1):
+        data = fetch_topic(topic_id)
+        if data is None:
+            continue
+        log.info("[%d/%d] fetched topic %d", n, len(missing), topic_id)
+        Topic.from_json(data, '').save_metadata(topics_dir)
+        time.sleep(0.3)
+
+    log.info("done: metadata for %d topics archived in %s",
+             len(archived_topic_ids(topics_dir)), topics_dir)
+
+
 def main() -> None:
     """
     Sync posts back to `metdata[last_sync_date] - 1 day`, and then save the rendered
@@ -325,12 +458,19 @@ def main() -> None:
 
     (posts_dir := target_dir / 'posts').mkdir(parents=True, exist_ok=True)
     (topics_dir := target_dir / 'rendered-topics').mkdir(parents=True, exist_ok=True)
+    (topics_meta_dir := target_dir / 'topics').mkdir(parents=True, exist_ok=True)
     (uploads_dir := target_dir / 'uploads').mkdir(parents=True, exist_ok=True)
 
     if args().backfill_uploads:
         backfill_uploads(posts_dir, uploads_dir)
         return
 
+    if args().backfill_topics:
+        save_categories(target_dir)
+        backfill_topics(posts_dir, topics_meta_dir)
+        return
+
+    save_categories(target_dir)
     archived_uploads = existing_uploads(uploads_dir)
 
     metadata_file = target_dir / '.metadata.json'
@@ -410,6 +550,10 @@ def main() -> None:
 
     for topic in topics_to_get.values():
         data = http_get_json(f"/t/{topic.id}.json")
+        # Save the metadata before the markdown: it's what the mirror needs,
+        # and it's still worth having for a topic whose `/raw/` is empty.
+        Topic.from_json(data, '').save_metadata(topics_meta_dir)
+
         body = http_get(f"/raw/{topic.id}")
         page_num = 2
 

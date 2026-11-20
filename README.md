@@ -20,7 +20,7 @@ or, if you don't trust package managers:
 ```sh
 % discourse-archive --help
 usage: discourse-archive [-h] [-u URL] [--debug] [-t TARGET_DIR] [--no-uploads]
-                         [--backfill-uploads]
+                         [--backfill-uploads] [--backfill-topics]
 
 Create a basic content archive from a Discourse installation
 
@@ -35,11 +35,16 @@ options:
   --backfill-uploads    Download any uploads referenced by already-archived
                         posts that are missing from <target-dir>/uploads, then
                         exit without syncing posts
+  --backfill-topics     Download the topic metadata (category, tags,
+                        participants, view count) of already-archived topics
+                        that is missing from <target-dir>/topics, then exit
+                        without syncing posts
 ```
 
 The structure that it generates looks something like:
 ```
 archive
+├── categories.json
 ├── uploads
 │   ├── 0128f183608738f985c7a22cba2fc9c522f98880.jpeg
 │   ├── 455abc133e0ab553eb12218497c96491d2003a1a.png
@@ -64,6 +69,12 @@ archive
 │       ├── 0000000174-jamesob-public-archive-for-delving-bitcoin.json
 │       ├── 0000000175-ajtowns-public-archive-for-delving-bitcoin.json
 │       └── 0000000178-midnight-public-archive-for-delving-bitcoin.json
+├── topics
+│   ├── 2022-08-August
+│   │   ├── 2022-08-24-about-the-economics-category-id14.json
+│   │   └── 2022-08-24-welcome-to-delving-bitcoin-id7.json
+│   └── 2023-01-January
+│       └── 2023-01-10-lightning-fees-inbound-vs-outbound-id29.json
 └── rendered-topics
     ├── 2022-08-August
     │   ├── 2022-08-24-about-the-economics-category-id14.md
@@ -80,6 +91,34 @@ archive
     └── 2023-09-September
         └── 2023-09-05-public-archive-for-delving-bitcoin-id87.md
 ```
+
+### Topic metadata
+
+Posts carry no more than a `topic_id`, `topic_slug` and `topic_title`;
+everything else about the topic they belong to -- its category, tags, view
+count, who took part in it and who posted last -- lives on the topic. That
+metadata is archived under `<target-dir>/topics`, one JSON file per topic,
+named like the rendered markdown of the same topic
+(`<created>-<slug>-id<id>.json`). It is the trimmed-down `/t/<id>.json`
+response: the topic's own fields plus the participants, without the posts
+(archived separately) or the current user's state.
+
+A topic's metadata is a snapshot, so it is re-saved on every sync that sees a
+new post in that topic.
+
+The `category_id` it carries is turned into a name and a color by
+`<target-dir>/categories.json`, the site's category list with subcategories
+flattened into it (each keeping its `parent_category_id`), re-fetched on every
+sync.
+
+To fetch the metadata of topics archived before this feature existed, run once:
+
+```sh
+% discourse-archive --backfill-topics
+```
+
+It fetches the metadata of every archived topic that is missing from
+`<target-dir>/topics`, and exits without syncing posts.
 
 ### Uploads (images)
 
